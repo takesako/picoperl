@@ -1,2 +1,3 @@
-perl-*.*.*
-*.tar.gz
+/.git/
+/perl-*.*.*/
+/*.tar.gz
