@@ -94,14 +94,38 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
       マクロ経由で直接呼んでいるだけなので関数ポインタ問題は無く、動作確認のみで
       修正不要だった
 
-## Phase 4: libc 依存の削減 → libc-pico2/ フォルダを作成し *.h *.c を作成
+## Phase 4: romperl の作成
 
-- [x] `#include <*.h>` で `libc-pico2/` フォルダが優先されて読み込まれるように
-      → `make-picoperl.sh` の `COPT` に `-Ilibc-pico2` を追加し、`libc-pico2/`
-      を `$OUT/libc-pico2/` へコピーするようにした。中身は `#include_next` で
-      本物のシステムヘッダも読み込みつつ、対象の関数だけを関数マクロで
-      上書きするシム方式(`libc-pico2/unistd.h` 等)
-- [x] プロセス系を無効: `fork` `execl` `execv` `execvp` `wait` `kill` `pipe`
+* [x] `../picoperl-5.12.5` を参照する形で `romperl` のフォルダに雛形を作成する
+      → `romperl/Makefile` が `../picoperl-5.12.5/*.o`(`uperlmain.o`除く)を
+      コピーせずそのままリンクする方式にした。ヘッダも `-I../picoperl-5.12.5`
+      で直接参照し、コピーは一切しない(ソースツリーの二重化を避けるため)。
+      前提として先に `../make-picoperl.sh` を実行して `.o` を生成しておく必要が
+      あり、`.o` が無い場合はエラーメッセージを出す
+      (最初 `romperl-5.12.5/` に picoperl 一式をコピーする案で作ったが、
+      ほぼ全ファイルが重複するため却下し、この参照方式に変更した)
+* [x] `miniperlmain.c` を参考に非常に簡素にした `main.c` を作成する
+      → `romperl/main.c`。PERL_GLOBAL_STRUCT/USE_ITHREADS/atarist/
+      NO_ENV_ARRAY_IN_MAIN 等、このビルドでは常に偽になる分岐や
+      `#ifndef PERL_MICRO`(常に真)のシグナル解除ループを削除。
+      `perl_run()` の戻り値を `exitstatus` に反映するよう修正(miniperlmain.cは
+      本来の perlmain.c と違い戻り値を握りつぶしていた)
+      動作確認: `./romperl -e`, `test-float.pl`, `test-noproc.pl` 全て
+      picoperl と同じ結果(バイナリサイズも 908,992 → 909,032 とほぼ同一)
+* [ ] read-only の ROMFS 形式を決める、互換性とシンプルを優先
+* [ ] `mkromfs` で `root.romfs` を生成できるようにする
+* [ ] ROMFS を実行ファイルの `.romfs` セクションに組み込む
+* [ ] ROMFS を Flash 上から直接読めるようにする
+* [ ] `open/read/seek/close/stat` の最小 API を実装する
+* [ ] Perl のファイル I/O を ROMFS に接続する
+* [ ] `/lib/feature.pm` を ROMFS から `require/use` できるようにする
+* [ ] テストファイルを作成しテストを組み込む
+
+## Phase 5: libc 依存の削減 → libc-pico2/ フォルダで *.h *.c を作成
+
+- [ ] `#include <*.h>` で `../libc-pico2/` フォルダが優先されて読み込まれるように
+      → `make-picoperl.sh` の `OPTIMIZE` に `-I../libc-pico2` を追加を確認
+- [ ] プロセス系を無効: `fork` `execl` `execv` `execvp` `wait` `kill` `pipe`
       `sleep` `getpid` `getuid` `geteuid` `getgid` `getegid` `setuid` `setgid`
       (主に `pp_sys.c` / `doio.c`) → `libc-pico2/unistd.h` / `signal.h` /
       `sys/wait.h` で常にエラー(`errno=ENOSYS`)または固定値を返すマクロに
@@ -132,7 +156,7 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
       `pp_pack.c`/`numeric.c`/`time64.c` あたりで直接 `floor()` 等を呼んでいる
       箇所がある想定。float 版に統一できるか、struct tm 計算など double が
       本質的に必要な箇所かを切り分ける
-- [ ] ファイル系を RAMFS 前提に: `open` `close` `read` `write` `lseek` `stat`
+- [ ] ファイル系を ROMFS 前提に: `open` `close` `read` `write` `lseek` `stat`
       `fstat` `opendir` `readdir` `closedir` `chdir` `chmod` `rename` `unlink`
       `umask` `dup` `isatty` `tmpfile`
 - [ ] stdio を PerlIO 経由で UART に直結: `fopen` `fclose` `fread` `fwrite`
@@ -146,7 +170,7 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
 - [ ] `__ctype_b_loc` (locale 依存) を外す → `locale.c` の除去とセット
 - [ ] `setjmp` / `longjmp` は Cortex-M33 でも必要。newlib-nano 版で確認
 
-## Phase 5: ARM Linux/Thumb で中間検証
+## Phase 6: ARM Linux/Thumb で中間検証
 
 - [ ] `arm-linux-gnueabihf-gcc -mthumb` でクロスビルドを試す、テストはまだ
 - [ ] `uconfig.sh.pico2` ファイルを作り、コピー処理を `make-picoperl.sh` の
@@ -155,20 +179,20 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
       クロスコンパイルしない場合も考慮していままでの処理は残す
 - [ ] `qemu-arm` 上で `test-float.pl` を通すようにする
 
-## Phase 6: arm-none-eabi / Cortex-M33 (RP2350)
+## Phase 7: arm-none-eabi / Cortex-M33 (RP2350)
 
 - [ ] `arm-none-eabi-gcc -mcpu=cortex-m33 -mthumb` + newlib-nano を参考に実装
 - [ ] リンカスクリプト / スタートアップ / スタックサイズの決定
 - [ ] ヒープサイズと RP2350 の RAM (520KB) に収まるかの見積もり
 - [ ] `setjmp`/`longjmp` と例外処理の動作確認
 
-## Phase 7: RAMFS + UART のみで動作
+## Phase 8: RAMFS + UART のみで動作
 
 - [ ] スクリプトをバイナリに埋め込む RAMFS を実装
 - [ ] PerlIO を UART ドライバに接続 (stdin/stdout/stderr のみ)
 - [ ] QEMU libvirt で起動確認
 
-## 検証コマンド
+## 検証コマンド（必要に応じて追加）
 
 ```sh
 ./make-picoperl.sh

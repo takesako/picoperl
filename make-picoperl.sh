@@ -3,7 +3,7 @@ set -eu
 
 V=5.12.5; T=perl-$V.tar.gz; SRC=perl-$V; OUT=picoperl-$V
 URL=https://www.cpan.org/src/5.0/$T; CC=${CC:-cc}; JOBS=${JOBS:-4}
-COPT="${COPT:--Os -std=gnu89 -DNO_MATHOMS -flto -ffunction-sections -fdata-sections -Ilibc-pico2}"
+OPTIMIZE="${OPTIMIZE:--Os -std=gnu89 -DNO_MATHOMS -flto -ffunction-sections -fdata-sections -I../libc-pico2}"
 case $(uname -s) in
 Darwin) LDFLAGS="${LDFLAGS:--flto -Wl,-dead_strip}";;
 *) LDFLAGS="${LDFLAGS:--flto -Wl,--gc-sections}";;
@@ -29,13 +29,6 @@ EOF
 ); do cp -p "$f" "../$OUT/"; done
 cp -p ../generate_uudmap.pl "../$OUT/"
 cp -p Makefile.micro "../$OUT/Makefile"
-
-# libc-pico2/: OSを前提とするlibc関数(fork/exec/kill/wait等)を無効化する
-# ヘッダシム置き場。-Ilibc-pico2 (COPT参照) で標準includeパスより優先させる。
-mkdir -p "../$OUT/libc-pico2/sys"
-cp -p ../libc-pico2/unistd.h "../$OUT/libc-pico2/"
-cp -p ../libc-pico2/signal.h "../$OUT/libc-pico2/"
-cp -p ../libc-pico2/sys/wait.h "../$OUT/libc-pico2/sys/"
 
 cd "../$OUT"
 chmod u+w Makefile miniperlmain.c uconfig.sh uconfig.h perl.h sv.c
@@ -91,7 +84,7 @@ perl -0777 -pi -e 's/\{ sizeof\(NV\), sizeof\(NV\), 0, SVt_NV, FALSE, HADNV, HAS
 
 make regen_uconfig
 make clean
-make -j"$JOBS" CC="$CC" LD="$CC" OPTIMIZE="$COPT" LDFLAGS="$LDFLAGS"
+make -j"$JOBS" CC="$CC" LD="$CC" OPTIMIZE="$OPTIMIZE" LDFLAGS="$LDFLAGS"
 ./picoperl -e 'print "picoperl $^V OK\n"'
 printf 'binary: '; wc -c < picoperl
 ./picoperl ../test-float.pl
