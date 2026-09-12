@@ -1,3 +1,5 @@
 /.git/
 /perl-*.*.*/
 /*.tar.gz
+*.o
+/picoperl-*/picoperl

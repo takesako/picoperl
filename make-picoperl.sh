@@ -48,3 +48,4 @@ make clean
 make -j"$JOBS" CC="$CC" LD="$CC" OPTIMIZE="$COPT" LDFLAGS="$LDFLAGS"
 ./picoperl -e 'print "picoperl $^V OK\n"'
 printf 'binary: '; wc -c < picoperl
+./picoperl ../test-float.pl
