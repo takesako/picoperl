@@ -1998,6 +1998,20 @@ EXTERN_C long double modfl(long double, long double *);
 #           define NV_MAX HUGE_VAL
 #       endif
 #   endif
+#   if NVSIZE == 4
+#   define Perl_cos cosf
+#   define Perl_sin sinf
+#   define Perl_sqrt sqrtf
+#   define Perl_exp expf
+#   define Perl_log logf
+#   define Perl_atan2 atan2f
+#   define Perl_pow powf
+#   define Perl_floor floorf
+#   define Perl_ceil ceilf
+#   define Perl_fmod fmodf
+#   define Perl_modf(x,y) modff(x,y)
+#   define Perl_frexp(x,y) frexpf(x,y)
+#   else
 #   define Perl_cos cos
 #   define Perl_sin sin
 #   define Perl_sqrt sqrt
@@ -2010,6 +2024,7 @@ EXTERN_C long double modfl(long double, long double *);
 #   define Perl_fmod fmod
 #   define Perl_modf(x,y) modf(x,y)
 #   define Perl_frexp(x,y) frexp(x,y)
+#   endif
 #endif
 
 /* rumor has it that Win32 has _fpclass() */

@@ -6,9 +6,10 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
 ## 現状 (2026-09-12, x86_64 WSL/Debian)
 
 - `./make-picoperl.sh` でビルド成功、`picoperl -e` 動作確認済み
-- バイナリサイズ: 909,664 bytes (`-Os -flto -ffunction-sections -fdata-sections` + `--gc-sections`)
-- NV は still double: `nvtype='double'` / `nvsize='8'` / `ivsize='8'`
-- 未定義 libc シンボル: 96 個 (`nm -u picoperl`)
+- バイナリサイズ: 909,832 bytes (`-Os -flto -ffunction-sections -fdata-sections` + `--gc-sections`)
+- NV は float 化済み: `nvtype='float'` / `nvsize='4'` / `ivsize='8'`
+- `./picoperl test-float.pl` は `# NV=float` + `ALL TESTS PASSED`
+- 未定義 libc シンボル: 96 個 (`nm -u picoperl`, Phase 2 時点では未計測見直し)
 
 ## Phase 1: 足場固め
 
@@ -18,13 +19,40 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
 
 ## Phase 2: NV を float にする
 
-- [ ] `make-picoperl.sh:43` の `perl -MConfig` 置換がホストの `nvtype=double` /
-      `nvsize=8` を焼き込んでいる。ここを float 用の上書きに変える
-- [ ] `uconfig.sh`: `nvtype='float'` / `nvsize='4'` / `d_longdbl='undef'`
-- [ ] `config_h.SH` 経由で決まる `NV_DIG` / `NV_MANT_DIG` / `NV_MAX` / `NV_MIN` /
-      `NV_EPSILON` / `NV_INF` / `NV_NAN` が float 相当になるか確認
-- [ ] IV 側も見直す (`ivsize=8` のままか、32bit 化するか)
-- [ ] `./picoperl test-float.pl` が `# NV=float` + `ALL TESTS PASSED` になること
+- [x] `make-picoperl.sh` の `uconfig.sh` 生成後に `nvtype='float'` / `nvsize='4'`
+      を上書きする1行を追加(`d_longdbl` は元々 `undef` なので変更不要)
+- [x] `uconfig.sh`: `nvtype='float'` / `nvsize='4'` / `d_longdbl='undef'`
+- [x] `config_h.SH` 経由の `NV_DIG` / `NV_MANT_DIG` / `NV_MAX` / `NV_MIN` /
+      `NV_EPSILON` を確認 → **float 相当にならず、常に `DBL_*` にハードコード**
+      されている(`perl.h` の `USE_LONG_DOUBLE` 分岐の `#else` 側)。
+      test-float.pl は数値の文字列化(sprintf %.*g)を経由しないため今回は
+      未着手のまま Phase 3 へ持ち越し。stringify する処理(`sprintf`,
+      `Perl_sv_vcatpvfn` 経由の `%f`/`%g` 出力)を追加するテストを書く際は
+      要注意
+- [x] IV 側を確認 → `ivsize=8` のまま(x86_64 host の `long` が 8byte のため)。
+      RP2350 は 32bit なので Phase 6/7 のクロスビルド時に自然と 4 になる想定。
+      いまは変更不要と判断
+- [x] `./picoperl test-float.pl` が `# NV=float` + `ALL TESTS PASSED` になること
+
+### Phase 2 で見つかった2つの実バグ(修正済み)
+
+1. **`pp.c:2837`**: `NV (*func)(NV) = Perl_sin;` で `Perl_sin` が `#define Perl_sin sin`
+   (`double sin(double)`) のままだと、`float(*)(float)` 型の関数ポインタに
+   `double(double)` 関数を代入することになり呼び出し規約が壊れる
+   (`sqrt(2)` が `0`、`sin(1)` が `1` を返す不正動作)。
+   → `perl.h` に `#if NVSIZE == 4` 分岐を追加し、`sinf`/`cosf`/`sqrtf`/`expf`/
+   `logf`/`atan2f`/`powf`/`floorf`/`ceilf`/`fmodf`/`modff`/`frexpf` を使うよう修正
+   (`make-picoperl.sh` から `perl -0777 -pi -e` で自動パッチ)
+2. **`sv.c` の `bodies_by_type[SVt_NV]`**: 空き body の連結に `*(void**)start = next`
+   で 8byte のポインタを書き込む (`S_more_bodies`) が、`body_size` が
+   `sizeof(NV)`(=4byte)しかないため隣接領域を破壊しセグフォルトしていた。
+   → `body_size` を `sizeof(NV)` と `sizeof(char*)` の大きい方にするよう
+   `sv.c` を自動パッチ。RP2350 (32bit, ポインタも4byte) では本来この問題は
+   起きないが、x86_64 (ポインタ8byte) での中間検証に必須の修正
+3. `test-float.pl` の `2^24+1 precision` テストが誤設計だった: `$i+=0.0` は
+   Perl の `PERL_PRESERVE_IVUV` 整数最適化により NV 変換を経由せず整数のまま
+   計算されるため float/double の差が出ない。`$i=16777217.0` (NV リテラル
+   直接代入)に変更して修正
 
 ## Phase 3: double 依存を言語側から外す
 

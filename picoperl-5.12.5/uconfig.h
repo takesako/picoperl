@@ -4432,7 +4432,7 @@
 #define	I64TYPE		long	/**/
 #define	U64TYPE		unsigned long	/**/
 #endif
-#define	NVTYPE		double		/**/
+#define	NVTYPE		float		/**/
 #define	IVSIZE		8		/**/
 #define	UVSIZE		8		/**/
 #define	I8SIZE		1		/**/
@@ -4445,7 +4445,7 @@
 #define	I64SIZE		8	/**/
 #define	U64SIZE		8	/**/
 #endif
-#define	NVSIZE		8		/**/
+#define	NVSIZE		4		/**/
 #undef	NV_PRESERVES_UV
 #define	NV_PRESERVES_UV_BITS	0
 #define	NV_OVERFLOWS_INTEGERS_AT	256.0*256.0*256.0*256.0*256.0*256.0*2.0*2.0*2.0*2.0*2.0

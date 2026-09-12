@@ -31,7 +31,7 @@ cp -p ../generate_uudmap.pl "../$OUT/"
 cp -p Makefile.micro "../$OUT/Makefile"
 
 cd "../$OUT"
-chmod u+w Makefile miniperlmain.c uconfig.sh uconfig.h
+chmod u+w Makefile miniperlmain.c uconfig.sh uconfig.h perl.h sv.c
 perl -pi -e 's/\ball:\s+microperl\b/all: picoperl/;s/^microperl:/picoperl:/;s/-o microperl/-o picoperl/;' Makefile
 perl -pi -e 's/\Q microperl generate_uudmap$(_X) uudmap.h\E/ picoperl/;' Makefile
 perl -0777 -pi -e 's/^uudmap\.h: generate_uudmap.*?^# That.s it, folks!//ms' Makefile
@@ -43,6 +43,18 @@ perl -0777 -pi -e 's@(    /\* Unregister our signal handler.*?)(    exitstatus =
 perl -MConfig -pi -e 's/^((?:short|int|long(?:dbl|long)?|ptr|double|[iun]v|u?quad|[iu]\d+|fpos|lseek)(?:size|type)|byteorder|d_quad|quadkind|use64.+|uidtype|gidtype)=.*/"$1=\x27$Config{$1}\x27"/e; s/^(d_const|i_unistd|i_fcntl)=.*/$1=\x27define\x27/' uconfig.sh
 perl -MConfig -pi -e 's/^(signal_t)=.*/"$1=\x27$Config{$1}\x27"/e;' uconfig.sh
 # perl -MConfig -pi -e 's/^(\w+)=.*/exists $Config{$1} ? $1."=\x27".(defined $Config{$1}?$Config{$1}:"undef")."\x27" : $&/e' uconfig.sh
+perl -pi -e "s/^nvtype=.*/nvtype='float'/; s/^nvsize=.*/nvsize='4'/" uconfig.sh
+
+# NVSIZE==4 の場合、Perl_sin等の関数ポインタ (NV(*)(NV)) にdouble版のsin/cos等を
+# 代入すると引数/戻り値のABIが食い違い呼び出しが壊れる(pp.cのpp_sin参照)ので、
+# float版libm関数(sinf等)に差し替える。
+perl -0777 -pi -e 's/^(#   define Perl_cos cos\n#   define Perl_sin sin\n#   define Perl_sqrt sqrt\n#   define Perl_exp exp\n#   define Perl_log log\n#   define Perl_atan2 atan2\n#   define Perl_pow pow\n#   define Perl_floor floor\n#   define Perl_ceil ceil\n#   define Perl_fmod fmod\n#   define Perl_modf\(x,y\) modf\(x,y\)\n#   define Perl_frexp\(x,y\) frexp\(x,y\)\n)/#   if NVSIZE == 4\n#   define Perl_cos cosf\n#   define Perl_sin sinf\n#   define Perl_sqrt sqrtf\n#   define Perl_exp expf\n#   define Perl_log logf\n#   define Perl_atan2 atan2f\n#   define Perl_pow powf\n#   define Perl_floor floorf\n#   define Perl_ceil ceilf\n#   define Perl_fmod fmodf\n#   define Perl_modf(x,y) modff(x,y)\n#   define Perl_frexp(x,y) frexpf(x,y)\n#   else\n$1#   endif\n/m' perl.h
+
+# SVt_NVの空きリストはbody領域にvoid*(8byte)を書き込んで繋ぐ(sv.cのS_more_bodies)。
+# NV=float(4byte)だとポインタサイズ未満になり隣接領域を破壊するため、
+# arenaに積むbody_sizeはsizeof(NV)とsizeof(char*)の大きい方にする。
+perl -0777 -pi -e 's/\{ sizeof\(NV\), sizeof\(NV\), 0, SVt_NV, FALSE, HADNV, HASARENA,\n(\s*)FIT_ARENA\(0, sizeof\(NV\)\) \},/{ (sizeof(NV)<sizeof(char*)?sizeof(char*):sizeof(NV)), sizeof(NV), 0, SVt_NV, FALSE, HADNV, HASARENA,\n$1FIT_ARENA(0, (sizeof(NV)<sizeof(char*)?sizeof(char*):sizeof(NV))) },/' sv.c
+
 make regen_uconfig
 make clean
 make -j"$JOBS" CC="$CC" LD="$CC" OPTIMIZE="$COPT" LDFLAGS="$LDFLAGS"

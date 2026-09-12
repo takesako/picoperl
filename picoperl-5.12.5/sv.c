@@ -932,8 +932,8 @@ static const struct body_details bodies_by_type[] = {
     },
 
     /* 8 bytes on most ILP32 with IEEE doubles */
-    { sizeof(NV), sizeof(NV), 0, SVt_NV, FALSE, HADNV, HASARENA,
-      FIT_ARENA(0, sizeof(NV)) },
+    { (sizeof(NV)<sizeof(char*)?sizeof(char*):sizeof(NV)), sizeof(NV), 0, SVt_NV, FALSE, HADNV, HASARENA,
+      FIT_ARENA(0, (sizeof(NV)<sizeof(char*)?sizeof(char*):sizeof(NV))) },
 
     /* 8 bytes on most ILP32 with IEEE doubles */
     { sizeof(XPV) - STRUCT_OFFSET(XPV, xpv_cur),
