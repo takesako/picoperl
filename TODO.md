@@ -112,8 +112,27 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
       本来の perlmain.c と違い戻り値を握りつぶしていた)
       動作確認: `./romperl -e`, `test-float.pl`, `test-noproc.pl` 全て
       picoperl と同じ結果(バイナリサイズも 908,992 → 909,032 とほぼ同一)
-* [ ] read-only の ROMFS 形式を決める、互換性とシンプルを優先
-* [ ] `mkromfs` で `root.romfs` を生成できるようにする
+* [x] read-only の ROMFS 形式を決める、互換性とシンプルを優先
+      → 既存フォーマットとの互換は捨て、自作の最小フォーマットを採用
+      (`romperl/romfs.h` に仕様を記述):
+      - ヘッダ16byte(`magic[4]="RFS1"`, `file_count`, `total_size`, `reserved`)
+        + エントリ40byte×file_count(`name[32]`, `offset`, `size`)+ ファイル
+        データを連結しただけの単純な構造
+      - ディレクトリ木は持たず、`name`はフルパス文字列("lib/feature.pm"のように
+        先頭'/'なし)の完全一致検索のみ。readdir相当は無い
+      - 整数はネイティブエンディアンのまま格納(x86_64ホストもCortex-M33
+        ターゲットもどちらもリトルエンディアンなのでバイトスワップ不要という
+        前提。他アーキテクチャに移植する場合は要見直し)
+      - 圧縮なし、read-only専用
+* [x] `mkromfs` で `root.romfs` を生成できるようにする
+      → `romperl/mkromfs.pl`(開発ホストのシステムperlで実行するビルドツール。
+      picoperl自身では動かさない)。`mkromfs.pl <src-dir> <out.romfs>` で
+      ディレクトリを再帰的に拾って生成、`mkromfs.pl --list <image>` で
+      中身を一覧できる検証モードも用意
+      → `romperl/rootfs/`(`lib/feature.pm`のプレースホルダと`hello.pl`)から
+      `root.romfs`を生成し、全ファイルのバイト列が元ファイルと一致することを
+      手動検証済み。`root.romfs`はmkromfs.plから再生成可能な生成物なので
+      `.gitignore`に追加(`rootfs/`ソース側のみコミット)
 * [ ] ROMFS を実行ファイルの `.romfs` セクションに組み込む
 * [ ] ROMFS を Flash 上から直接読めるようにする
 * [ ] `open/read/seek/close/stat` の最小 API を実装する
