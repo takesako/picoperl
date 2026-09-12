@@ -6,15 +6,18 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
 ## 現状 (2026-09-12, x86_64 WSL/Debian)
 
 - `./make-picoperl.sh` でビルド成功、`picoperl -e` 動作確認済み
-- バイナリサイズ: 909,832 bytes (`-Os -flto -ffunction-sections -fdata-sections` + `--gc-sections`)
+- バイナリサイズ: 908,992 bytes (`-Os -flto -ffunction-sections -fdata-sections` + `--gc-sections`)
 - NV は float 化済み: `nvtype='float'` / `nvsize='4'` / `ivsize='8'`
 - `NV_DIG`/`NV_MANT_DIG`/`NV_MIN`/`NV_MAX`/`NV_EPSILON` も `FLT_*` 基準に修正済み
   (Phase 3)。数値の文字列化(`print`/`sprintf`のデフォルト精度)が float 相当になった
 - `./picoperl test-float.pl` は `# NV=float` + `ALL TESTS PASSED`(stringify precision
   テストを追加)
-- 未定義 libc シンボル: 104 個 (`nm -u picoperl`)。Phase 2/3 で `sinf` 等の float 版
-  libm 関数が増えた一方、`floor`/`ceil`/`fmod` は double 版もまだ別箇所から
-  直接呼ばれており両方リンクされている(Phase 4 で要精査)
+- `libc-pico2/` フォルダ(Phase 4)で `fork`/`exec*`/`pipe`/`kill`/`wait*`/`sleep`/
+  `get{u,g,eu,eg}id`/`set{u,g}id` を無効化・固定値化。`./picoperl test-noproc.pl`
+  も `ALL TESTS PASSED`
+- 未定義 libc シンボル: 88 個 (`nm -u picoperl`, Phase 1時点は96個)。`floor`/`ceil`/
+  `fmod` は double 版もまだ別箇所から直接呼ばれており float 版と両方リンクされて
+  いる(Phase 4 で要精査、次の項目)
 
 ## Phase 1: 足場固め
 
@@ -93,14 +96,42 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
 
 ## Phase 4: libc 依存の削減 → libc-pico2/ フォルダを作成し *.h *.c を作成
 
+- [x] `#include <*.h>` で `libc-pico2/` フォルダが優先されて読み込まれるように
+      → `make-picoperl.sh` の `COPT` に `-Ilibc-pico2` を追加し、`libc-pico2/`
+      を `$OUT/libc-pico2/` へコピーするようにした。中身は `#include_next` で
+      本物のシステムヘッダも読み込みつつ、対象の関数だけを関数マクロで
+      上書きするシム方式(`libc-pico2/unistd.h` 等)
+- [x] プロセス系を無効: `fork` `execl` `execv` `execvp` `wait` `kill` `pipe`
+      `sleep` `getpid` `getuid` `geteuid` `getgid` `getegid` `setuid` `setgid`
+      (主に `pp_sys.c` / `doio.c`) → `libc-pico2/unistd.h` / `signal.h` /
+      `sys/wait.h` で常にエラー(`errno=ENOSYS`)または固定値を返すマクロに
+      置き換えた。`test-noproc.pl` を追加して `make-picoperl.sh` から自動実行。
+      `nm -u` の未定義シンボル数: 104 → 88 個
+  - `libc-pico2/unistd.h`: `fork`/`execl`/`execv`/`execvp`/`pipe`/`sleep`/
+    `getpid`(→1)/`getuid`/`geteuid`/`getgid`/`getegid`(→0)/`setuid`/`setgid`
+  - `libc-pico2/signal.h`: `kill`/`killpg`
+  - `libc-pico2/sys/wait.h`: `wait`/`waitpid`
+  - ハマった点1: `perl.h` が `Uid_t getuid (void);` のように getuid 等を
+    無条件に素のプロトタイプ再宣言している。関数マクロはコール式だけでなく
+    宣言文中の同名トークンも展開してしまい `Uid_t ((uid_t)0);` のような
+    壊れた宣言になってコンパイルエラーになった。可変引数マクロ
+    (`#define getuid(...) ...`)にしても「宣言と展開後の構文が合わない」
+    問題自体は解決しないため、結局 `perl.h` 側のその宣言ブロックを
+    `#ifndef PICOPERL_LIBC_PICO2_UNISTD_H` で無効化する追加パッチが必要だった
+  - ハマった点2: `i_syswait='undef'` のため `<sys/wait.h>` がどこからも
+    include されておらず、`wait()` が暗黙宣言のまま本物のlibc関数を直接
+    呼んでいた(`libc-pico2/sys/wait.h` を置いても include されなければ
+    差し替わらない)。`uconfig.sh` の `i_syswait` を `define` にして
+    `#include <sys/wait.h>` を実際に通るようにして解決
+  - `kill(0,$$)` は `libc-pico2/signal.h` の前に `doio.c` の `apply()` が
+    `#ifndef HAS_KILL` で "The kill function is unimplemented" と die する
+    既存の仕組みが先に効いていた(`d_kill='undef'` のため)。signal.h の
+    シムは `apply()` を経由しない直接呼び出し経路への保険として残す
 - [ ] `floor`/`ceil`/`fmod`(double版)が `floorf`/`ceilf`/`fmodf` と両方リンク
       されている(`nm -u` で確認)。`Perl_floor`等のマクロ経由以外にも
       `pp_pack.c`/`numeric.c`/`time64.c` あたりで直接 `floor()` 等を呼んでいる
       箇所がある想定。float 版に統一できるか、struct tm 計算など double が
       本質的に必要な箇所かを切り分ける
-- [ ] プロセス系を無効: `fork` `execl` `execv` `execvp` `wait` `kill` `pipe`
-      `sleep` `getpid` `getuid` `geteuid` `getgid` `getegid` `setuid` `setgid`
-      (主に `pp_sys.c` / `doio.c`) → 常にエラーを返すマクロ実装に置き換える
 - [ ] ファイル系を RAMFS 前提に: `open` `close` `read` `write` `lseek` `stat`
       `fstat` `opendir` `readdir` `closedir` `chdir` `chmod` `rename` `unlink`
       `umask` `dup` `isatty` `tmpfile`
@@ -117,13 +148,16 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
 
 ## Phase 5: ARM Linux/Thumb で中間検証
 
-- [ ] `arm-linux-gnueabihf-gcc -mthumb` でクロスビルド
-- [ ] `qemu-arm` 上で `test-float.pl` を通す
-- [ ] サイズを記録して x86_64 版と比較
+- [ ] `arm-linux-gnueabihf-gcc -mthumb` でクロスビルドを試す、テストはまだ
+- [ ] `uconfig.sh.pico2` ファイルを作り、コピー処理を `make-picoperl.sh` の
+      `make regen_uconfig` に追加する。クロスコンパイルのオプション pico2 を
+      追加した場合このコピー処理を実行してCCも変更する
+      クロスコンパイルしない場合も考慮していままでの処理は残す
+- [ ] `qemu-arm` 上で `test-float.pl` を通すようにする
 
 ## Phase 6: arm-none-eabi / Cortex-M33 (RP2350)
 
-- [ ] `arm-none-eabi-gcc -mcpu=cortex-m33 -mthumb` + newlib-nano
+- [ ] `arm-none-eabi-gcc -mcpu=cortex-m33 -mthumb` + newlib-nano を参考に実装
 - [ ] リンカスクリプト / スタートアップ / スタックサイズの決定
 - [ ] ヒープサイズと RP2350 の RAM (520KB) に収まるかの見積もり
 - [ ] `setjmp`/`longjmp` と例外処理の動作確認

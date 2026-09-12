@@ -813,7 +813,7 @@
  *	This symbol, if defined, indicates to the C program that it should
  *	include <sys/wait.h>.
  */
-/*#define I_SYS_WAIT	/ **/
+#define I_SYS_WAIT	/**/
 
 /* I_TERMIO:
  *	This symbol, if defined, indicates that the program should include

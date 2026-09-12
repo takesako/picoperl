@@ -3,7 +3,7 @@ set -eu
 
 V=5.12.5; T=perl-$V.tar.gz; SRC=perl-$V; OUT=picoperl-$V
 URL=https://www.cpan.org/src/5.0/$T; CC=${CC:-cc}; JOBS=${JOBS:-4}
-COPT="${COPT:--Os -std=gnu89 -DNO_MATHOMS -flto -ffunction-sections -fdata-sections}"
+COPT="${COPT:--Os -std=gnu89 -DNO_MATHOMS -flto -ffunction-sections -fdata-sections -Ilibc-pico2}"
 case $(uname -s) in
 Darwin) LDFLAGS="${LDFLAGS:--flto -Wl,-dead_strip}";;
 *) LDFLAGS="${LDFLAGS:--flto -Wl,--gc-sections}";;
@@ -30,6 +30,13 @@ EOF
 cp -p ../generate_uudmap.pl "../$OUT/"
 cp -p Makefile.micro "../$OUT/Makefile"
 
+# libc-pico2/: OSを前提とするlibc関数(fork/exec/kill/wait等)を無効化する
+# ヘッダシム置き場。-Ilibc-pico2 (COPT参照) で標準includeパスより優先させる。
+mkdir -p "../$OUT/libc-pico2/sys"
+cp -p ../libc-pico2/unistd.h "../$OUT/libc-pico2/"
+cp -p ../libc-pico2/signal.h "../$OUT/libc-pico2/"
+cp -p ../libc-pico2/sys/wait.h "../$OUT/libc-pico2/sys/"
+
 cd "../$OUT"
 chmod u+w Makefile miniperlmain.c uconfig.sh uconfig.h perl.h sv.c
 perl -pi -e 's/\ball:\s+microperl\b/all: picoperl/;s/^microperl:/picoperl:/;s/-o microperl/-o picoperl/;' Makefile
@@ -51,6 +58,12 @@ perl -pi -e "s/^nvtype=.*/nvtype='float'/; s/^nvsize=.*/nvsize='4'/" uconfig.sh
 # d_dbl_digも合わせて有効化し、perl.hのDBL_DIGフォールバック定義との重複警告を防ぐ。
 perl -pi -e "s/^i_float=.*/i_float='define'/; s/^d_dbl_dig=.*/d_dbl_dig='define'/" uconfig.sh
 
+# i_syswait='undef' だと <sys/wait.h> がどこからもincludeされず、wait()の宣言が
+# 無い(暗黙のK&R形式)まま本物のwait()が直接呼ばれる。libc-pico2/sys/wait.hで
+# wait/waitpidを無効化しても、includeされなければ差し替わらない。有効化して
+# シム経由にする(WCOREDUMP等のマクロが追加で使えるようになるだけで副作用は無い)。
+perl -pi -e "s/^i_syswait=.*/i_syswait='define'/" uconfig.sh
+
 # NVSIZE==4 の場合、Perl_sin等の関数ポインタ (NV(*)(NV)) にdouble版のsin/cos等を
 # 代入すると引数/戻り値のABIが食い違い呼び出しが壊れる(pp.cのpp_sin参照)ので、
 # float版libm関数(sinf等)に差し替える。
@@ -64,6 +77,13 @@ perl -0777 -pi -e 's/^(#   define Perl_cos cos\n#   define Perl_sin sin\n#   def
 #  パッチは必ずPerl_sinパッチの後に実行すること)
 perl -0777 -pi -e 's/(#   define NV_DIG DBL_DIG\n.*?\n)(?=#   if NVSIZE == 4\n)/#   if NVSIZE == 4\n#   define NV_DIG FLT_DIG\n#   ifdef FLT_MANT_DIG\n#       define NV_MANT_DIG FLT_MANT_DIG\n#   endif\n#   ifdef FLT_MIN\n#       define NV_MIN FLT_MIN\n#   endif\n#   ifdef FLT_MAX\n#       define NV_MAX FLT_MAX\n#   endif\n#   ifdef FLT_MIN_10_EXP\n#       define NV_MIN_10_EXP FLT_MIN_10_EXP\n#   endif\n#   ifdef FLT_MAX_10_EXP\n#       define NV_MAX_10_EXP FLT_MAX_10_EXP\n#   endif\n#   ifdef FLT_EPSILON\n#       define NV_EPSILON FLT_EPSILON\n#   endif\n#   ifdef FLT_MAX\n#       define NV_MAX FLT_MAX\n#       define NV_MIN FLT_MIN\n#   else\n#       ifdef HUGE_VALF\n#           define NV_MAX HUGE_VALF\n#       endif\n#   endif\n#   else\n$1#   endif\n/s' perl.h
 
+# perl.hはgetuid/geteuid/getgid/getegidを無条件に素のプロトタイプとして
+# 再宣言している。libc-pico2/unistd.hがこれらを関数マクロに差し替えると、
+# マクロはコール式だけでなく宣言文の中の同名トークンも展開してしまうため
+# `Uid_t getuid (void);` が `Uid_t ((uid_t)0);` のような壊れた宣言になる。
+# シムのインクルードガードが有効な間だけこの再宣言をスキップする。
+perl -0777 -pi -e 's/(Uid_t getuid \(void\);\nUid_t geteuid \(void\);\nGid_t getgid \(void\);\nGid_t getegid \(void\);\n)/#ifndef PICOPERL_LIBC_PICO2_UNISTD_H\n$1#endif\n/' perl.h
+
 # SVt_NVの空きリストはbody領域にvoid*(8byte)を書き込んで繋ぐ(sv.cのS_more_bodies)。
 # NV=float(4byte)だとポインタサイズ未満になり隣接領域を破壊するため、
 # arenaに積むbody_sizeはsizeof(NV)とsizeof(char*)の大きい方にする。
@@ -75,3 +95,4 @@ make -j"$JOBS" CC="$CC" LD="$CC" OPTIMIZE="$COPT" LDFLAGS="$LDFLAGS"
 ./picoperl -e 'print "picoperl $^V OK\n"'
 printf 'binary: '; wc -c < picoperl
 ./picoperl ../test-float.pl
+./picoperl ../test-noproc.pl
