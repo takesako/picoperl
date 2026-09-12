@@ -37,4 +37,36 @@ struct romfs_entry {
     uint32_t size;                  /* ファイルサイズ (バイト) */
 };                              /* 40 bytes */
 
+/*
+ * 最小 open/read/seek/close/stat API。
+ *
+ * ファイルディスクリプタはROMFS_MAX_OPEN個の固定配列から割り当てる
+ * (動的確保なし)。パスはromfs_entry.nameとの完全一致でのみ検索する。
+ * romfs_init() を呼ぶ前に他の romfs_* 関数を呼んではいけない。
+ */
+#define ROMFS_MAX_OPEN 8
+
+#define ROMFS_SEEK_SET 0
+#define ROMFS_SEEK_CUR 1
+#define ROMFS_SEEK_END 2
+
+struct romfs_stat {
+    uint32_t size;
+};
+
+/* image/size は .romfs セクションに埋め込まれたイメージの先頭とバイト数。
+ * magicが不正な場合は0を、正常なら1を返す。 */
+int  romfs_init(const unsigned char *image, unsigned long size);
+
+/* 見つからない/空きfdが無い場合は-1 */
+int  romfs_open(const char *path);
+/* 読めたバイト数 (0はEOF)。fdが不正なら-1 */
+long romfs_read(int fd, void *buf, unsigned long len);
+/* 新しい位置。whenceが不正/fdが不正なら-1。範囲外は[0,size]にクランプする */
+long romfs_lseek(int fd, long offset, int whence);
+/* 常に0。fdが不正でも黙って無視する (close(2)相当の緩さ) */
+int  romfs_close(int fd);
+/* 見つかれば0、無ければ-1 */
+int  romfs_stat(const char *path, struct romfs_stat *out);
+
 #endif /* PICOPERL_ROMFS_H */

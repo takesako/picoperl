@@ -5,3 +5,5 @@
 /picoperl-*/picoperl
 /romperl/romperl
 /romperl/root.romfs
+/romperl/romfs_data.c
+/romperl/romfs_test

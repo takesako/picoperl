@@ -27,7 +27,29 @@ romperl: uperlmain.o
 uperlmain.o: main.c
 	$(CC) -c -o $@ $(CFLAGS) main.c
 
-clean:
-	rm -f uperlmain.o romperl
+# ROMFSイメージをrootfs/から生成し、Cソースとして埋め込む。
+ROOTFS_FILES = $(shell find rootfs -type f)
 
-.PHONY: all clean
+root.romfs: mkromfs.pl $(ROOTFS_FILES)
+	./mkromfs.pl rootfs root.romfs
+
+romfs_data.c: mkromfs.pl root.romfs
+	./mkromfs.pl --carray root.romfs romfs_data.c romfs_image
+
+romfs_data.o: romfs_data.c
+	$(CC) -c -o $@ $(OPTIMIZE) romfs_data.c
+
+romfs.o: romfs.c romfs.h
+	$(CC) -c -o $@ $(OPTIMIZE) romfs.c
+
+# romfs.c/romfs_data.cのAPI単体テスト (Perl統合前の動作確認用)。
+romfs_test: romfs_test.c romfs.o romfs_data.o
+	$(CC) -o $@ $(OPTIMIZE) romfs_test.c romfs.o romfs_data.o $(LDFLAGS)
+
+test-romfs: romfs_test
+	./romfs_test
+
+clean:
+	rm -f uperlmain.o romperl romfs.o romfs_data.o romfs_data.c root.romfs romfs_test.o romfs_test
+
+.PHONY: all clean test-romfs

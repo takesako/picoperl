@@ -133,9 +133,22 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
       `root.romfs`を生成し、全ファイルのバイト列が元ファイルと一致することを
       手動検証済み。`root.romfs`はmkromfs.plから再生成可能な生成物なので
       `.gitignore`に追加(`rootfs/`ソース側のみコミット)
-* [ ] ROMFS を実行ファイルの `.romfs` セクションに組み込む
-* [ ] ROMFS を Flash 上から直接読めるようにする
-* [ ] `open/read/seek/close/stat` の最小 API を実装する
+* [x] ROMFS を実行ファイルの `.romfs` セクションに組み込む
+* [x] ROMFS を Flash 上から直接読めるようにする
+      → この2項目はまとめて対応。読む側(`romfs_open`等)から見ればROMFSは
+      「不変のバイト列へのポインタ」でしかなく、それがx86_64ではリンクされた
+      `.romfs`セクション(プロセスのデータ領域)、Cortex-M33ではFlashに
+      mmapされた領域、という違いはリンカ/ハードウェア側の話でAPI実装は
+      共通化できる。`mkromfs.pl --carray`でrootfs/→root.romfs→Cの
+      `unsigned char[]`(`__attribute__((section(".romfs")))`付き)まで生成
+      するようMakefileに組み込んだ。`readelf -S`で`.romfs`セクションが
+      実際に作られることを確認済み。Flash上でのmmap自体はRP2350実機が
+      無いと検証できないため、Phase 6/7でのお楽しみとして残す
+* [x] `open/read/seek/close/stat` の最小 API を実装する
+      → `romperl/romfs.h`(宣言)+`romperl/romfs.c`(実装)。fdはROMFS_MAX_OPEN(8)個の
+      固定配列から割り当て(動的確保なし)。`romfs_test.c`で13項目のスタンド
+      アロンテストを書いて `make test-romfs` で実行できるようにした
+      (Perl統合前にAPI単体の正しさを検証するため。ALL TESTS PASSED)
 * [ ] Perl のファイル I/O を ROMFS に接続する
 * [ ] `/lib/feature.pm` を ROMFS から `require/use` できるようにする
 * [ ] テストファイルを作成しテストを組み込む
