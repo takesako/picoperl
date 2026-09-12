@@ -92,7 +92,7 @@
  *	of significant digits in a double precision number.  If this
  *	symbol is not defined, a guess of 15 is usually pretty good.
  */
-/*#define HAS_DBL_DIG 	/ * */
+#define HAS_DBL_DIG 	/* */
 
 /* HAS_DIFFTIME:
  *	This symbol, if defined, indicates that the difftime routine is
@@ -668,7 +668,7 @@
  *	include <float.h> to get definition of symbols like DBL_MAX or
  *	DBL_MIN, i.e. machine dependent floating point values.
  */
-/*#define I_FLOAT		/ **/
+#define I_FLOAT		/**/
 
 /* I_GDBM:
  *	This symbol, if defined, indicates that <gdbm.h> exists and should

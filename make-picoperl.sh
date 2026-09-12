@@ -45,10 +45,24 @@ perl -MConfig -pi -e 's/^(signal_t)=.*/"$1=\x27$Config{$1}\x27"/e;' uconfig.sh
 # perl -MConfig -pi -e 's/^(\w+)=.*/exists $Config{$1} ? $1."=\x27".(defined $Config{$1}?$Config{$1}:"undef")."\x27" : $&/e' uconfig.sh
 perl -pi -e "s/^nvtype=.*/nvtype='float'/; s/^nvsize=.*/nvsize='4'/" uconfig.sh
 
+# i_float='undef' だと perl.h は <float.h> をincludeしない。DBL_DIG等はperl.h内に
+# フォールバック値があるため気づきにくいが、FLT_DIG等は代替値が無いためNVSIZE==4の
+# 分岐でコンパイルエラーになる。glibcには<float.h>があるので素直に有効化する。
+# d_dbl_digも合わせて有効化し、perl.hのDBL_DIGフォールバック定義との重複警告を防ぐ。
+perl -pi -e "s/^i_float=.*/i_float='define'/; s/^d_dbl_dig=.*/d_dbl_dig='define'/" uconfig.sh
+
 # NVSIZE==4 の場合、Perl_sin等の関数ポインタ (NV(*)(NV)) にdouble版のsin/cos等を
 # 代入すると引数/戻り値のABIが食い違い呼び出しが壊れる(pp.cのpp_sin参照)ので、
 # float版libm関数(sinf等)に差し替える。
 perl -0777 -pi -e 's/^(#   define Perl_cos cos\n#   define Perl_sin sin\n#   define Perl_sqrt sqrt\n#   define Perl_exp exp\n#   define Perl_log log\n#   define Perl_atan2 atan2\n#   define Perl_pow pow\n#   define Perl_floor floor\n#   define Perl_ceil ceil\n#   define Perl_fmod fmod\n#   define Perl_modf\(x,y\) modf\(x,y\)\n#   define Perl_frexp\(x,y\) frexp\(x,y\)\n)/#   if NVSIZE == 4\n#   define Perl_cos cosf\n#   define Perl_sin sinf\n#   define Perl_sqrt sqrtf\n#   define Perl_exp expf\n#   define Perl_log logf\n#   define Perl_atan2 atan2f\n#   define Perl_pow powf\n#   define Perl_floor floorf\n#   define Perl_ceil ceilf\n#   define Perl_fmod fmodf\n#   define Perl_modf(x,y) modff(x,y)\n#   define Perl_frexp(x,y) frexpf(x,y)\n#   else\n$1#   endif\n/m' perl.h
+
+# NVSIZE==4 でも NV_DIG/NV_MANT_DIG/NV_MIN/NV_MAX/NV_EPSILON は常に DBL_* に
+# ハードコードされている。これらは数値→文字列変換(sv_2pv/Gconvertのprintf精度)や
+# numeric.cのPerl_my_atof2(MAX_SIG_DIGITS=NV_DIG+2)が参照するため、float基準の
+# FLT_* に差し替えないと print で無意味に長い桁(倍精度昇格分のゴミ桁)が出る。
+# (直前のPerl_sinパッチが挿入する「#   if NVSIZE == 4」を目印にするため、この
+#  パッチは必ずPerl_sinパッチの後に実行すること)
+perl -0777 -pi -e 's/(#   define NV_DIG DBL_DIG\n.*?\n)(?=#   if NVSIZE == 4\n)/#   if NVSIZE == 4\n#   define NV_DIG FLT_DIG\n#   ifdef FLT_MANT_DIG\n#       define NV_MANT_DIG FLT_MANT_DIG\n#   endif\n#   ifdef FLT_MIN\n#       define NV_MIN FLT_MIN\n#   endif\n#   ifdef FLT_MAX\n#       define NV_MAX FLT_MAX\n#   endif\n#   ifdef FLT_MIN_10_EXP\n#       define NV_MIN_10_EXP FLT_MIN_10_EXP\n#   endif\n#   ifdef FLT_MAX_10_EXP\n#       define NV_MAX_10_EXP FLT_MAX_10_EXP\n#   endif\n#   ifdef FLT_EPSILON\n#       define NV_EPSILON FLT_EPSILON\n#   endif\n#   ifdef FLT_MAX\n#       define NV_MAX FLT_MAX\n#       define NV_MIN FLT_MIN\n#   else\n#       ifdef HUGE_VALF\n#           define NV_MAX HUGE_VALF\n#       endif\n#   endif\n#   else\n$1#   endif\n/s' perl.h
 
 # SVt_NVの空きリストはbody領域にvoid*(8byte)を書き込んで繋ぐ(sv.cのS_more_bodies)。
 # NV=float(4byte)だとポインタサイズ未満になり隣接領域を破壊するため、

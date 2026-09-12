@@ -9,4 +9,5 @@ my $i=16777217.0;
 ok($i==($f?16777216:16777217),"2^24+1 precision");
 ok((1+2**-24==1)==$f,"epsilon");
 ok((16777216.0+1==16777216)==$f,"2^24 boundary");
+ok((1/3) eq ($f?"0.333333":"0.333333333333333"),"stringify precision (NV_DIG)");
 print "ALL TESTS PASSED\n";

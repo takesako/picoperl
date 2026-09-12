@@ -1971,6 +1971,35 @@ EXTERN_C long double modfl(long double, long double *);
 #       endif
 #   endif
 #else
+#   if NVSIZE == 4
+#   define NV_DIG FLT_DIG
+#   ifdef FLT_MANT_DIG
+#       define NV_MANT_DIG FLT_MANT_DIG
+#   endif
+#   ifdef FLT_MIN
+#       define NV_MIN FLT_MIN
+#   endif
+#   ifdef FLT_MAX
+#       define NV_MAX FLT_MAX
+#   endif
+#   ifdef FLT_MIN_10_EXP
+#       define NV_MIN_10_EXP FLT_MIN_10_EXP
+#   endif
+#   ifdef FLT_MAX_10_EXP
+#       define NV_MAX_10_EXP FLT_MAX_10_EXP
+#   endif
+#   ifdef FLT_EPSILON
+#       define NV_EPSILON FLT_EPSILON
+#   endif
+#   ifdef FLT_MAX
+#       define NV_MAX FLT_MAX
+#       define NV_MIN FLT_MIN
+#   else
+#       ifdef HUGE_VALF
+#           define NV_MAX HUGE_VALF
+#       endif
+#   endif
+#   else
 #   define NV_DIG DBL_DIG
 #   ifdef DBL_MANT_DIG
 #       define NV_MANT_DIG DBL_MANT_DIG
@@ -1997,6 +2026,7 @@ EXTERN_C long double modfl(long double, long double *);
 #       ifdef HUGE_VAL
 #           define NV_MAX HUGE_VAL
 #       endif
+#   endif
 #   endif
 #   if NVSIZE == 4
 #   define Perl_cos cosf
