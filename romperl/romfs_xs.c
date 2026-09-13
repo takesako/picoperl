@@ -38,8 +38,8 @@ XS(XS_Romperl_romfs_read)
     dXSARGS;
     STRLEN plen;
     const char *path;
-    struct romfs_stat st;
-    int fd;
+    const void *data;
+    unsigned long size;
     SV *result;
 
     if (items != 1)
@@ -47,28 +47,30 @@ XS(XS_Romperl_romfs_read)
 
     path = SvPV(ST(0), plen);
 
-    if (romfs_stat(path, &st) != 0) {
+    data = romfs_data(path, &size);
+    if (!data) {
         ST(0) = &PL_sv_undef;
         XSRETURN(1);
     }
 
-    fd = romfs_open(path);
-    if (fd < 0) {
-        ST(0) = &PL_sv_undef;
-        XSRETURN(1);
-    }
-
-    result = newSV(st.size);
+    /*
+     * ゼロコピー: SVのPVバッファをmallocせず、ROMFSイメージ上のバイト列
+     * そのものを直接指す。SvLEN(result)=0は「このSVはPVバッファを所有して
+     * いない」という意味で、Perl内部の共有ハッシュキー文字列等と同じ
+     * 表現(sv.cのPerl_sv_clearはSvLENが0ならSafefreeしないので、
+     * このSVが解放されてもROMFS側のメモリを誤って自由に触ることはない)。
+     * このSVが後で sv_chop/sv_grow 等で書き換えを必要とされた場合は
+     * Perl側が自動的にオウンドコピーへ昇格させるので安全性も保たれる
+     * (例えば require の filter_cache 経路は1行読むごとに sv_chop するため、
+     * 最初の消費で結局コピーされる。だがそれ以外の「文字列として読むだけ」
+     * の用途では最後までmalloc/memcpyが一切発生しない)。
+     */
+    result = newSV(0);
+    sv_upgrade(result, SVt_PV);
+    SvPV_set(result, (char *)data);
+    SvCUR_set(result, (STRLEN)size);
+    SvLEN_set(result, 0);
     SvPOK_on(result);
-    if (st.size) {
-        char *buf = SvPVX(result);
-        long n = romfs_read(fd, buf, st.size);
-        SvCUR_set(result, n > 0 ? (STRLEN)n : 0);
-    } else {
-        SvCUR_set(result, 0);
-    }
-    *SvEND(result) = '\0';
-    romfs_close(fd);
 
     ST(0) = sv_2mortal(result);
     XSRETURN(1);

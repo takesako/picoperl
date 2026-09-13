@@ -135,3 +135,14 @@ romfs_stat(const char *path, struct romfs_stat *out)
     out->size = e->size;
     return 0;
 }
+
+const void *
+romfs_data(const char *path, unsigned long *out_size)
+{
+    const struct romfs_entry *e = romfs_find(path);
+    if (!e)
+        return (const void *)0;
+    if (out_size)
+        *out_size = e->size;
+    return romfs_base + e->offset;
+}

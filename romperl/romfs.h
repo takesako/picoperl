@@ -69,4 +69,12 @@ int  romfs_close(int fd);
 /* 見つかれば0、無ければ-1 */
 int  romfs_stat(const char *path, struct romfs_stat *out);
 
+/*
+ * ゼロコピー読み出し用。ROMFSイメージ内のファイルデータそのものへの
+ * ポインタ(mallocしたコピーではない)を返す。呼び出し側はこの領域を
+ * 書き換えてはいけない(read-only、ROMFSイメージが生きている間だけ有効)。
+ * 見つからなければNULLを返す。
+ */
+const void *romfs_data(const char *path, unsigned long *out_size);
+
 #endif /* PICOPERL_ROMFS_H */

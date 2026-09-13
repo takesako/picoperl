@@ -199,6 +199,47 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
       `../test-noproc.pl`(picoperl向け回帰テスト)をまとめて実行できるように
       した。`make test`でPhase4全体の動作を一括確認できる
 
+### Phase 4 追加: 依存モジュールの追加とゼロコピー化
+
+- [x] `Carp.pm`/`strict.pm`/`warnings.pm`とその依存先を`romperl/rootfs/lib/`に
+      追加(いずれもperl-5.12.5本体からの無改変コピー):
+      - `Carp.pm` → `require Exporter` が必要 → `Exporter.pm`を追加
+      - `Exporter.pm` → 一部の高度な機能で`Exporter::Heavy`を遅延require →
+        `Exporter/Heavy.pm`を追加
+      - `warnings.pm`のエラーパス(`Croaker`)は`Carp`を遅延require。
+        `warnings::register`(`warnings/register.pm`)も併せて追加
+        (`warnings.pm`にのみ依存する小さなモジュールなので)
+      - 動作確認: `use strict; use warnings; use Carp;` に加えて
+        `croak`/`carp`/`confess`(スタックトレース付き)まで実際に実行して
+        正しい出力になることを確認。副次効果として`use feature;`
+        (引数無し)も正しく`"No features specified"`とcroakするように
+        なった(以前は`Carp.pm`が無く`Can't locate Carp.pm`で失敗していた)
+- [x] `Romperl::romfs_read`をゼロコピー化(mallocの節約)
+      - 設計: 返すSVの`SvPV`をmallocしたコピーではなく、ROMFSイメージ上の
+        バイト列に直接向ける。`SvLEN(sv)=0`は「このSVはPVバッファを
+        所有していない」という意味で、Perl内部の共有ハッシュキー文字列等
+        と同じ表現。`sv.c`の`Perl_sv_clear`は`SvLEN`が0なら`Safefree`しない
+        ため、このSVが解放されてもROMFS側のメモリを誤って解放することは
+        無い(`sv.c:5864`で確認)
+      - 制約(調査して判明): `require`/`use`の`@INC`フックが返す
+        スカラーリファレンスは、`pp_ctl.c`の`S_run_user_filter`が
+        1行読むごとに`sv_chop`で消費する。`sv_chop`(`sv.c:4707-4714`)は
+        `SvLEN(sv)==0`のSVに対して「所有権の無い文字列のコピーを作る」
+        処理を最初の呼び出し時に必ず行う(共有文字列を書き換え可能にする
+        ための昇格)。つまり**require経由で読み込まれるモジュールは
+        結局1回はコピーされる**(Perlの内部実装がそういう設計のため。
+        picoperl-5.12.5には手を入れない方針なのでここは変更できない)
+      - 得られる効果: (1) 完全に消費されない/require以外の用途で
+        `Romperl::romfs_read`を使う場合(例えば将来スクリプトが
+        データファイルを読むだけの用途)はmalloc/memcpyが一切発生しない。
+        (2) requireの場合でも、コピーが「romfs_read呼び出し時」から
+        「実際にsv_chopされる時」に遅延される。モジュールが最後まで
+        使われる典型ケースでは総コピー量は変わらないが、無駄な早期
+        コピーは無くなる
+      - 動作確認: `make -C romperl test`全項目(ROMFS API単体13 + Perl統合
+        4 + `test-float.pl`/`test-noproc.pl`回帰)がゼロコピー化後も
+        パスすることを確認済み
+
 ## Phase 5: libc 依存の削減 → libc-pico2/ フォルダで *.h *.c を作成
 
 - [ ] `#include <*.h>` で `../libc-pico2/` フォルダが優先されて読み込まれるように
