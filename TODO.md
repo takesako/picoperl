@@ -286,13 +286,60 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
         `Exporter/Heavy.pm`/`feature.pm`)全てを`perl -c`で構文検証。
         さらに`perl-5.12.5/lib/`配下84個の`.pm`ファイル全部をminifyして
         `perl -c`にかける網羅テストも実施し、対象7ファイルは全て
-        パスすることを確認(残り8個はヒアドキュメント`<<EOM`関連の
-        別種の未修正の問題で失敗するが、今回の対象ファイルには
-        含まれないため未対応のまま。ヒアドキュメントを含むファイルを
-        将来ROMFSに入れる場合は要注意)
+        パスすることを確認
       - `make -C romperl test`全項目 + `croak`/`carp`/`confess`
         (スタックトレース付き)/`say`の統合確認、picoperl本体の
         回帰確認ともパス
+      - 上記84ファイル網羅テストで、対象7ファイル以外に**ヒアドキュメント
+        (`<<EOM`等)関連で8個中6個が失敗**していた: `deprecate.pm`
+        `Dumpvalue.pm` `Benchmark.pm` `I18N/Collate.pm` `Getopt/Std.pm`
+        `ExtUtils/Embed.pm`(残り2個は別の問題:
+        `diagnostics.pm`は`my $_`絡みの意味論エラー、
+        `Pod/Functions.pm`は`format`ブロック絡みで、いずれもヒアドキュメント
+        とは無関係)。この時点では今回の対象ファイルに影響しないため
+        未修正のまま残していた → 下記の通りCGI.pm追加時に修正した
+
+- [x] `minify.pl`のヒアドキュメント破壊バグを修正し、`CGI.pm`
+      (+依存の`CGI::Util`/`constant`/`overload`/`vars`)を追加
+      - **バグの原因**: ヒアドキュメント(`<<'EOT'`等)は「呼び出し文の
+        直後の物理行からボディが始まる」という前提で本文が保持される。
+        従来のminify.plは「セミコロンの直後の空白/改行は消してよい」という
+        ルールを無条件に適用しており、ヒアドキュメントを呼び出す文の
+        直後の改行まで削除してしまっていた。結果、後続の文がヒアドキュメント
+        呼び出し行に連結され(`my$x=<<'EOR';print"...";`のようになり)、
+        本来の位置にあるべきボディの手前に後続コードが来てしまい、
+        `Can't find string terminator` エラーになっていた
+        (`CGI::Util.pm`の`<<'EOR'`で発覚、`perl-5.12.5/cpan/CGI/lib/CGI/Util.pm:252`)
+      - **修正方針**: 安全に判定するコストが高いため、`PPI::Token::HereDoc`
+        を含むファイルでは改行に触る2つの空白最適化ループ(演算子まわりの
+        空白詰め、構造体まわりの空白除去)を丸ごと無効化するようにした
+        (コメント/POD除去やqw()詰め等、改行を触らない最適化は従来通り適用)。
+        安全性を優先し、ヒアドキュメントを含むファイルでは圧縮率が
+        多少落ちるトレードオフを許容している
+      - 再検証: 前述の6ファイル全て`perl -c`でsyntax OKになったことを確認。
+        `perl-5.12.5/lib/`+`cpan/CGI/lib/`+`dist/constant/lib/`配下94個の
+        `.pm`をminify+構文チェックする網羅テストを再実行し、新たな
+        リグレッションが無いことを確認(残る失敗は`CGI.pm`本体や
+        `CGI::Push`/`Switch`/`Pretty`/`Cookie`/`Apache`/`Fast`等の
+        未対応サブモジュール群で、いずれも`perl -c`単体実行時の
+        「依存モジュールが@INCに無い」という予期された失敗であり
+        minifyのバグではない。`diagnostics.pm`/`Pod/Functions.pm`は
+        引き続き別問題のまま未修正)
+      - `CGI.pm`本体は`perl-5.12.5/cpan/CGI/lib/CGI.pm`(coreではなく
+        cpanバンドル)。依存は`CGI::Util`(同ディレクトリ)、
+        `constant`(`perl-5.12.5/dist/constant/lib/`)、
+        `overload`/`vars`(`perl-5.12.5/lib/`、いずれも`warnings::register`
+        にのみ依存)。`romperl/Makefile`にソースツリーの場所が異なる分の
+        個別ルールを追加(`CPAN_CGI_LIB`/`DIST_CONSTANT_LIB`)
+      - ROMFSサイズ: 22,955 → 160,496 bytes(CGI.pm本体が約26万byte→
+        minify後も十数万byteある大きなモジュールのため)
+      - 動作確認: `use CGI; CGI->new; escapeHTML; header;
+        start_html/h1/end_html`、明示的なクエリ文字列を渡した
+        `param()`取得まで実際に実行して確認。
+        (`%ENV`経由の自動パラメータ取得は`$ENV{QUERY_STRING}`が
+        空になり動かなかったが、これはromperl固有ではなくpicoperl自体が
+        `%ENV`を全く populate しない既存の特性だった。CGI.pm追加や
+        ROMFS接続とは無関係の別課題としてPhase 5以降で扱う)
 
 ## Phase 5: libc 依存の削減 → libc-pico2/ フォルダで *.h *.c を作成
 
@@ -336,6 +383,9 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
       `fgetc` `fputs` `fprintf` `fflush` `fseek` `ftell` `feof` `ferror`
       `clearerr` `fileno` `fdopen` `ungetc` `stdin` `stdout` `stderr`
 - [ ] 環境変数の実装: `getenv` `putenv` → freeしないハッシュに格納する
+      (Phase4で判明: picoperlは現状`%ENV`を全く populate しない。
+      `QUERY_STRING="..." ./picoperl -e 'print $ENV{QUERY_STRING}'`が
+      空になることを確認済み。CGI.pmの自動パラメータ取得等に影響する)
 - [ ] `qsort` → `pp_sort.c` 内製ソートに寄せる
 - [ ] `rand` / `srand` → 内製 PRNG に置き換え
 - [ ] `localtime` / `time` → `time64.c` + 固定エポックの時刻を返す

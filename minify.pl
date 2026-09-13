@@ -17,8 +17,17 @@ $doc->prune('PPI::Statement::End');
 
 my$op = qr/^(?:=~|!~|==|!=|<=|>=|=>|\+=|-=|\*=|\/=|%=|\.=|&&|\|\||\*\*|[=<>+\-*%.?:,])$/;
 
+# ヒアドキュメント (<<'EOT' 等) はボディが「その行の直後の物理行」に
+# 続くという前提で本文が保存されている。空白/改行の詰め直しをすると
+# ヒアドキュメント呼び出し文の直後にあるはずの改行が消え、後続のコードが
+# ボディより前に来てしまい (my$x=<<'EOR';print"...";\nbody\nEOR;) 、
+# 元のterminatorが見つからなくなって構文が壊れる。安全に判定する
+# コストが高いため、ヒアドキュメントを含むファイルでは改行を触る
+# 最適化(このファイルの2つのwhitespace関連ループ)を丸ごと無効化する。
+my$has_heredoc = @{$doc->find('PPI::Token::HereDoc')||[]} ? 1 : 0;
+
 # whitespace
-for my$ws(@{$doc->find('PPI::Token::Whitespace')||[]}){
+for my$ws($has_heredoc ? () : @{$doc->find('PPI::Token::Whitespace')||[]}){
     my($p,$n)=($ws->previous_token,$ws->next_token);
 
     if(!$p||!$n){$ws->delete;next}
@@ -84,7 +93,7 @@ for my$ws(@{$doc->find('PPI::Token::Whitespace')||[]}){
 }
 
 # whitespace around structures and final ";" inside them
-for my $type('PPI::Structure::Block','PPI::Structure::Condition','PPI::Structure::List'){
+for my $type($has_heredoc ? () : ('PPI::Structure::Block','PPI::Structure::Condition','PPI::Structure::List')){
     for my $x(@{$doc->find($type)||[]}){
         my $a=$x->first_token;
         $a->delete if $a&&$a->isa('PPI::Token::Whitespace');

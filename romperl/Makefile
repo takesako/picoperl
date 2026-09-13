@@ -33,10 +33,14 @@ uperlmain.o: main.c romfs.h
 romfs_xs.o: romfs_xs.c romfs.h
 	$(CC) -c -o $@ $(CFLAGS) romfs_xs.c
 
-# rootfs/lib/*.pm は perl-5.12.5/lib/*.pm を ../minify.pl (PPIでコメント/POD/
+# rootfs/lib/*.pm は perl-5.12.5内の各*.pmを ../minify.pl (PPIでコメント/POD/
 # 空白を削るミニファイア) にかけて生成する。コミットはせず、ビルドの都度
 # 作り直す(root.romfsやromfs_data.cと同じ扱い)。
+# CGI.pm/CGI::Util は core lib/ ではなく cpan/CGI/lib/ 、constant は
+# dist/constant/lib/ に置かれているため、それぞれ個別ルールで対応する。
 PERL_LIB = ../perl-5.12.5/lib
+CPAN_CGI_LIB = ../perl-5.12.5/cpan/CGI/lib
+DIST_CONSTANT_LIB = ../perl-5.12.5/dist/constant/lib
 MINIFY = ../minify.pl
 
 ROOTFS_PM = \
@@ -46,9 +50,26 @@ ROOTFS_PM = \
 	rootfs/lib/Carp.pm \
 	rootfs/lib/Exporter.pm \
 	rootfs/lib/Exporter/Heavy.pm \
-	rootfs/lib/feature.pm
+	rootfs/lib/feature.pm \
+	rootfs/lib/overload.pm \
+	rootfs/lib/vars.pm \
+	rootfs/lib/constant.pm \
+	rootfs/lib/CGI.pm \
+	rootfs/lib/CGI/Util.pm
 
 rootfs/lib/%.pm: $(PERL_LIB)/%.pm $(MINIFY)
+	@mkdir -p $(dir $@)
+	perl $(MINIFY) < $< > $@
+
+rootfs/lib/CGI.pm: $(CPAN_CGI_LIB)/CGI.pm $(MINIFY)
+	@mkdir -p $(dir $@)
+	perl $(MINIFY) < $< > $@
+
+rootfs/lib/CGI/Util.pm: $(CPAN_CGI_LIB)/CGI/Util.pm $(MINIFY)
+	@mkdir -p $(dir $@)
+	perl $(MINIFY) < $< > $@
+
+rootfs/lib/constant.pm: $(DIST_CONSTANT_LIB)/constant.pm $(MINIFY)
 	@mkdir -p $(dir $@)
 	perl $(MINIFY) < $< > $@
 
@@ -87,6 +108,6 @@ test: romperl test-romfs test-inc-require
 clean:
 	rm -f uperlmain.o romperl romfs.o romfs_data.o romfs_data.c root.romfs romfs_test.o romfs_test romfs_xs.o
 	rm -f $(ROOTFS_PM)
-	rmdir rootfs/lib/Exporter rootfs/lib/warnings rootfs/lib 2>/dev/null || true
+	rmdir rootfs/lib/Exporter rootfs/lib/warnings rootfs/lib/CGI rootfs/lib 2>/dev/null || true
 
 .PHONY: all clean test test-romfs test-inc-require
