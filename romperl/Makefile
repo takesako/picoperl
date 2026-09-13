@@ -33,10 +33,30 @@ uperlmain.o: main.c romfs.h
 romfs_xs.o: romfs_xs.c romfs.h
 	$(CC) -c -o $@ $(CFLAGS) romfs_xs.c
 
-# ROMFSイメージをrootfs/から生成し、Cソースとして埋め込む。
-ROOTFS_FILES = $(shell find rootfs -type f)
+# rootfs/lib/*.pm は perl-5.12.5/lib/*.pm を ../minify.pl (PPIでコメント/POD/
+# 空白を削るミニファイア) にかけて生成する。コミットはせず、ビルドの都度
+# 作り直す(root.romfsやromfs_data.cと同じ扱い)。
+PERL_LIB = ../perl-5.12.5/lib
+MINIFY = ../minify.pl
 
-root.romfs: mkromfs.pl $(ROOTFS_FILES)
+ROOTFS_PM = \
+	rootfs/lib/strict.pm \
+	rootfs/lib/warnings.pm \
+	rootfs/lib/warnings/register.pm \
+	rootfs/lib/Carp.pm \
+	rootfs/lib/Exporter.pm \
+	rootfs/lib/Exporter/Heavy.pm \
+	rootfs/lib/feature.pm
+
+rootfs/lib/%.pm: $(PERL_LIB)/%.pm $(MINIFY)
+	@mkdir -p $(dir $@)
+	perl $(MINIFY) < $< > $@
+
+# ROMFSイメージをrootfs/から生成し、Cソースとして埋め込む。rootfs/lib/以下は
+# 上のルールで生成するので、素のfindでは拾わずROOTFS_PMを明示的に依存に含める。
+ROOTFS_STATIC_FILES = $(shell find rootfs -type f -not -path 'rootfs/lib/*')
+
+root.romfs: mkromfs.pl $(ROOTFS_PM) $(ROOTFS_STATIC_FILES)
 	./mkromfs.pl rootfs root.romfs
 
 romfs_data.c: mkromfs.pl root.romfs
@@ -66,5 +86,7 @@ test: romperl test-romfs test-inc-require
 
 clean:
 	rm -f uperlmain.o romperl romfs.o romfs_data.o romfs_data.c root.romfs romfs_test.o romfs_test romfs_xs.o
+	rm -f $(ROOTFS_PM)
+	rmdir rootfs/lib/Exporter rootfs/lib/warnings rootfs/lib 2>/dev/null || true
 
 .PHONY: all clean test test-romfs test-inc-require

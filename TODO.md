@@ -253,6 +253,47 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
         コピー回数・総量ともに退行しておらず、それ以外の読み取り専用
         用途では完全にコピー0回になる、という設計通りの結果になっている
 
+### Phase 4 追加: minify.pl で rootfs/lib/*.pm を圧縮生成
+
+- [x] `minify.pl`(PPIでコメント/POD/空白を削るミニファイア、プロジェクト
+      ルート)を使って`romperl/rootfs/lib/*.pm`を再生成するようにした
+      - `romperl/rootfs/lib/*.pm`はもう手動コピーで git commit しない。
+        `romperl/Makefile`に`rootfs/lib/%.pm: ../perl-5.12.5/lib/%.pm`
+        というパターンルールを追加し、`perl ../minify.pl < 元ファイル >
+        rootfs/lib/対象.pm`で毎回作り直す(root.romfs/romfs_data.cと同じ
+        「生成物はコミットしない」扱いに統一。`.gitignore`に
+        `/romperl/rootfs/lib/`を追加し、以前コミットしていた素コピーは
+        `git rm --cached`した)
+      - 効果: ROMFSイメージが69,460 → 22,955 bytes(約67%削減)。
+        コメント・POD・空白を削ることでFlash容量を節約できる
+      - **minify.plのバグを2件発見して修正**(いずれも「バスワード的な
+        トークンの直後の空白を無条件に消す」ルールが、結合後に別の
+        トークンとして再字句解析されてしまうケースを考慮していなかった):
+        1. `eq`/`ne`/`lt`等の単語演算子の直後にWord/Numberが続く場合
+           (例: `Carp.pm`の`ref $x eq ref \$i`)、空白を消すと
+           `eqref`のように1つの識別子に結合されて構文エラーになる →
+           後続の先頭文字が英数字/アンダースコア/単一引用符の場合は
+           空白を残すよう修正
+        2. bareword直後にQuoteが続く場合の`die"error"`最適化が、
+           `warnings 'once'`のような単一引用符文字列で旧式パッケージ
+           区切り記号(`Foo'bar`は`Foo::bar`と同義)と誤認識されたり
+           (`Carp.pm`)、`qq[...]`のような英字始まりの引用形式で
+           `warn`+`qq`が`warnqq`に結合されたりする(`Exporter/Heavy.pm`)
+           → `"`または`` ` ``で始まる場合だけ空白を消すホワイトリスト
+           方式に変更
+      - 検証方法: 対象7ファイル(`strict.pm`/`warnings.pm`/
+        `warnings/register.pm`/`Carp.pm`/`Exporter.pm`/
+        `Exporter/Heavy.pm`/`feature.pm`)全てを`perl -c`で構文検証。
+        さらに`perl-5.12.5/lib/`配下84個の`.pm`ファイル全部をminifyして
+        `perl -c`にかける網羅テストも実施し、対象7ファイルは全て
+        パスすることを確認(残り8個はヒアドキュメント`<<EOM`関連の
+        別種の未修正の問題で失敗するが、今回の対象ファイルには
+        含まれないため未対応のまま。ヒアドキュメントを含むファイルを
+        将来ROMFSに入れる場合は要注意)
+      - `make -C romperl test`全項目 + `croak`/`carp`/`confess`
+        (スタックトレース付き)/`say`の統合確認、picoperl本体の
+        回帰確認ともパス
+
 ## Phase 5: libc 依存の削減 → libc-pico2/ フォルダで *.h *.c を作成
 
 - [ ] `#include <*.h>` で `../libc-pico2/` フォルダが優先されて読み込まれるように
