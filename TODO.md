@@ -239,6 +239,19 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
       - 動作確認: `make -C romperl test`全項目(ROMFS API単体13 + Perl統合
         4 + `test-float.pl`/`test-noproc.pl`回帰)がゼロコピー化後も
         パスすることを確認済み
+      - **実測での検証**: 「余分な二重コピーが無いか」をソースコードの
+        読解だけでなく実測でも確認した。`malloc`/`realloc`をLD_PRELOADで
+        フックして閾値以上のサイズだけログするトレーサを作り、
+        `use strict; use warnings; use Carp;` 実行時に各モジュールの
+        ファイルサイズ(Carp.pm=16146, Exporter.pm=18494,
+        warnings.pm=17476, strict.pm=3716 byte)に一致する大きさの
+        `malloc`がそれぞれ**ちょうど1回ずつ**しか発生しないことを確認
+        (2回以上出ればsv_chop昇格コピーとは別に余分なコピーが起きている
+        ことになるが、そうはなっていない)。旧実装(romfs_read内で
+        毎回mallocしていた版)でも同じ1回のコピーが発生するだけなので、
+        今回の変更は「requireされて最後まで消費される」ケースでは
+        コピー回数・総量ともに退行しておらず、それ以外の読み取り専用
+        用途では完全にコピー0回になる、という設計通りの結果になっている
 
 ## Phase 5: libc 依存の削減 → libc-pico2/ フォルダで *.h *.c を作成
 
