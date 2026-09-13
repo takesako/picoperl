@@ -3,7 +3,7 @@
 picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リスト。
 詳細な方針は [CLAUDE.md](CLAUDE.md) を参照。
 
-## 現状 (2026-09-12, x86_64 WSL/Debian)
+## 現状 (2026-09-13, x86_64 WSL/Debian)
 
 - `./make-picoperl.sh` でビルド成功、`picoperl -e` 動作確認済み
 - バイナリサイズ: 908,992 bytes (`-Os -flto -ffunction-sections -fdata-sections` + `--gc-sections`)
@@ -12,12 +12,19 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
   (Phase 3)。数値の文字列化(`print`/`sprintf`のデフォルト精度)が float 相当になった
 - `./picoperl test-float.pl` は `# NV=float` + `ALL TESTS PASSED`(stringify precision
   テストを追加)
-- `libc-pico2/` フォルダ(Phase 4)で `fork`/`exec*`/`pipe`/`kill`/`wait*`/`sleep`/
+- `libc-pico2/` フォルダ(Phase 5)で `fork`/`exec*`/`pipe`/`kill`/`wait*`/`sleep`/
   `get{u,g,eu,eg}id`/`set{u,g}id` を無効化・固定値化。`./picoperl test-noproc.pl`
   も `ALL TESTS PASSED`
 - 未定義 libc シンボル: 88 個 (`nm -u picoperl`, Phase 1時点は96個)。`floor`/`ceil`/
   `fmod` は double 版もまだ別箇所から直接呼ばれており float 版と両方リンクされて
-  いる(Phase 4 で要精査、次の項目)
+  いる(Phase 5 で要精査)
+- `romperl/`(Phase 4)完成: `../picoperl-5.12.5`の`.o`を参照するだけで
+  picoperl-5.12.5自体には一切手を入れずに、自作ROMFS形式の埋め込み
+  (`.romfs`セクション)、`open/read/seek/close/stat`最小API、
+  `@INC`フック経由の`require/use`接続まで実装。`make -C romperl test`で
+  一括検証できる(`romfs_test`のAPI単体テスト13項目 +
+  `test-inc-require.pl`のPerl統合4項目 + `test-float.pl`/`test-noproc.pl`の
+  回帰確認)
 
 ## Phase 1: 足場固め
 
@@ -149,9 +156,42 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
       固定配列から割り当て(動的確保なし)。`romfs_test.c`で13項目のスタンド
       アロンテストを書いて `make test-romfs` で実行できるようにした
       (Perl統合前にAPI単体の正しさを検証するため。ALL TESTS PASSED)
-* [ ] Perl のファイル I/O を ROMFS に接続する
-* [ ] `/lib/feature.pm` を ROMFS から `require/use` できるようにする
-* [ ] テストファイルを作成しテストを組み込む
+* [x] Perl のファイル I/O を ROMFS に接続する
+* [x] `/lib/feature.pm` を ROMFS から `require/use` できるようにする
+      → この2項目もまとめて対応。ユーザー指示により **picoperl-5.12.5/には
+      一切手を入れず**、romperl/フォルダ内の新規ファイルだけで実現した:
+      - `romperl/romfs_xs.c`: xsubppを使わず手書きしたXSUB。
+        `Romperl::romfs_read(path)` (ROMFSの1ファイル全体をPerl文字列で返す)
+        と、`Romperl::Boot::import` (下記フックをインストールする)の2つを
+        `newXS()`登録
+      - `require/use`をROMFSに繋ぐのはPerl標準の拡張ポイントである
+        「`@INC`へのコードリファレンス登録」のみ。C側の`doio.c`/`perlio.c`
+        は一切触っていない
+      - `main.c`がargv先頭に`-MRomperl::Boot`を挿入することで、通常の
+        `use`文と同じ安全なタイミング(BEGIN時)でフックが積まれるように
+        した。**xs_init()から直接eval_pv()するとパーサ初期化前でクラッシュ
+        する**ため、正規のuse/require経由の呼び出しにする必要があった
+      - フック自体は「`lib/<filename>`をROMFSから読めれば返す、
+        無ければ次の@INCエントリに委ねる」だけの3行のPerlコード
+      - **ハマった点**: このpicoperlビルドは`useperlio='undef'`
+        (USE_PERLIO無効、素のstdioのみ)のため、`open($fh,'<',\$scalar)`
+        のin-memoryファイルハンドルが「Invalid argument」で失敗する
+        (PerlIOの`:scalar`レイヤーが無い)。picoperl-5.12.5を再コンパイルして
+        USE_PERLIOを有効化することはできないので、`pp_ctl.c`の`pp_require`
+        (`PP(pp_require)`)がサポートするもう一つのプロトコル—フックが
+        ファイルハンドルの代わりに「スカラーへのリファレンス1個」を返すと
+        `filter_cache`としてソースフィルタ経由でそのまま読み込まれる—を
+        使うことで解決。PerlIOを一切経由しない
+      - 検証: `use feature;`(romfs内`lib/feature.pm`のプレースホルダ)が
+        romperlでは成功し、ROMFSを持たないpicoperlでは
+        `Can't locate feature.pm` で失敗することを確認
+* [x] テストファイルを作成しテストを組み込む
+      → `romperl/test-inc-require.pl`(use経由のロード成功、`%INC`登録、
+      存在しないモジュールは通常通り失敗して`@INC`探索が続くこと、の4項目)。
+      `romperl/Makefile`に`test`ターゲットを追加し、`romfs_test`
+      (API単体テスト)・`test-inc-require.pl`・`../test-float.pl`・
+      `../test-noproc.pl`(picoperl向け回帰テスト)をまとめて実行できるように
+      した。`make test`でPhase4全体の動作を一括確認できる
 
 ## Phase 5: libc 依存の削減 → libc-pico2/ フォルダで *.h *.c を作成
 

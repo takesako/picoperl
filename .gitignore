@@ -7,3 +7,4 @@
 /romperl/root.romfs
 /romperl/romfs_data.c
 /romperl/romfs_test
+core.*

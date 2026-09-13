@@ -17,15 +17,21 @@ PICOPERL_OBJS = $(filter-out %/uperlmain.o,$(wildcard $(PICOPERL_DIR)/*.o))
 
 all: romperl
 
-romperl: uperlmain.o
+# romfs.o/romfs_data.oはromfs.h以外picoperlのヘッダに依存しないのでOPTIMIZEのみ
+# で足りるが、romfs_xs.oはperl.h/XSUB.hを使うためmain.cと同じCFLAGS
+# (PERL_CORE等)でコンパイルする。異なるdefineでABIがずれるのを防ぐため。
+romperl: uperlmain.o romfs.o romfs_data.o romfs_xs.o
 	@if [ -z "$(strip $(PICOPERL_OBJS))" ]; then \
 		echo "error: $(PICOPERL_DIR)/*.o が無い。先に ../make-picoperl.sh を実行すること" >&2; \
 		exit 1; \
 	fi
-	$(CC) -o $@ uperlmain.o $(PICOPERL_OBJS) $(LDFLAGS) -lm
+	$(CC) -o $@ uperlmain.o romfs.o romfs_data.o romfs_xs.o $(PICOPERL_OBJS) $(LDFLAGS) -lm
 
-uperlmain.o: main.c
+uperlmain.o: main.c romfs.h
 	$(CC) -c -o $@ $(CFLAGS) main.c
+
+romfs_xs.o: romfs_xs.c romfs.h
+	$(CC) -c -o $@ $(CFLAGS) romfs_xs.c
 
 # ROMFSイメージをrootfs/から生成し、Cソースとして埋め込む。
 ROOTFS_FILES = $(shell find rootfs -type f)
@@ -49,7 +55,16 @@ romfs_test: romfs_test.c romfs.o romfs_data.o
 test-romfs: romfs_test
 	./romfs_test
 
-clean:
-	rm -f uperlmain.o romperl romfs.o romfs_data.o romfs_data.c root.romfs romfs_test.o romfs_test
+# romperl本体を使ったテスト一式。既存のpicoperl向けテストが romperl でも
+# 通ること(回帰確認)と、ROMFS経由のrequire/useが動くことを確認する。
+test-inc-require: romperl
+	./romperl test-inc-require.pl
 
-.PHONY: all clean test-romfs
+test: romperl test-romfs test-inc-require
+	./romperl ../test-float.pl
+	./romperl ../test-noproc.pl
+
+clean:
+	rm -f uperlmain.o romperl romfs.o romfs_data.o romfs_data.c root.romfs romfs_test.o romfs_test romfs_xs.o
+
+.PHONY: all clean test test-romfs test-inc-require
