@@ -146,3 +146,14 @@ romfs_data(const char *path, unsigned long *out_size)
         *out_size = e->size;
     return romfs_base + e->offset;
 }
+
+const void *
+romfs_data_for_compile(const char *path, unsigned long *out_size)
+{
+    const struct romfs_entry *e = romfs_find(path);
+    if (!e)
+        return (const void *)0;
+    if (out_size)
+        *out_size = (unsigned long)e->size + 1; /* ';'センチネルを含める */
+    return romfs_base + e->offset;
+}

@@ -3257,6 +3257,15 @@ S_doopen_pm(pTHX_ const char *name, const STRLEN namelen)
 #  define doopen_pm(name, namelen) check_type_and_open(name)
 #endif /* !PERL_DISABLE_PMC */
 
+__attribute__((weak))
+const void *
+romperl_find_for_compile(const char *name, unsigned long *out_len)
+{
+    PERL_UNUSED_ARG(name);
+    PERL_UNUSED_ARG(out_len);
+    return NULL;
+}
+
 PP(pp_require)
 {
     dVAR; dSP;
@@ -3278,6 +3287,7 @@ PP(pp_require)
     SV *filter_state = NULL;
     SV *filter_sub = NULL;
     SV *hook_sv = NULL;
+    SV *romsv = NULL; /* romperl: ROMFSから見つかったソース(ゼロコピー) */
     SV *encoding;
     OP *op;
 
@@ -3389,13 +3399,27 @@ PP(pp_require)
 	}
     }
 
+    /* romperl: INC探索より前にROMFSを直接調べる */
+    {
+        unsigned long romlen = 0;
+        const void *romptr = romperl_find_for_compile(name, &romlen);
+        if (romptr) {
+            romsv = newSV_type(SVt_PV);
+            SvPV_set(romsv, (char *)romptr);
+            SvCUR_set(romsv, (STRLEN)romlen);
+            SvLEN_set(romsv, 0);
+            SvPOK_on(romsv);
+            tryname = name;
+        }
+    }
+
     /* prepare to compile file */
 
     if (path_is_absolute(name)) {
 	tryname = name;
 	tryrsfp = doopen_pm(name, len);
     }
-    if (!tryrsfp) {
+    if (!tryrsfp && !romsv) {
 	AV * const ar = GvAVn(PL_incgv);
 	I32 i;
 #ifdef VMS
@@ -3600,7 +3624,7 @@ PP(pp_require)
     SAVECOPFILE_FREE(&PL_compiling);
     CopFILE_set(&PL_compiling, tryrsfp ? tryname : name);
     SvREFCNT_dec(namesv);
-    if (!tryrsfp) {
+    if (!tryrsfp && !romsv) {
 	if (PL_op->op_type == OP_REQUIRE) {
 	    const char *msgstr = name;
 	    if(errno == EMFILE) {
@@ -3652,7 +3676,8 @@ PP(pp_require)
 
     ENTER_with_name("eval");
     SAVETMPS;
-    lex_start(NULL, tryrsfp, TRUE);
+    lex_start(romsv ? romsv : NULL, tryrsfp, TRUE);
+    if (romsv) SvREFCNT_dec(romsv);
 
     SAVEHINTS();
     PL_hints = 0;

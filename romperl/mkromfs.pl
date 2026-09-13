@@ -71,7 +71,19 @@ sub build_romfs {
             offset => length($data),
             size   => length($content),
         };
-        $data .= $content;
+        # ファイル本体の直後に';'+NUL の2byteを追加する(entry.sizeには
+        # 含めない)。';'はpp_requireを直接ROMFSに繋ぐ経路
+        # (romfs_data_for_compile)がlex_start()のゼロコピー分岐(入力の
+        # 最後のバイトが';'ならSVをコピーしない)を満たすためのセンチネル。
+        # NULはそれとは別の目的で必須: PerlのSV文字列はSvPVX(sv)[SvCUR(sv)]
+        # (=長さの1つ先)が読める'\0'であることを随所で前提にしている
+        # (toke.cのS_scan_strが閉じ引用符を探す際の境界チェック等)。
+        # ';'だけだとその1つ先は次のエントリの中身(NULとは限らない)に
+        # なってしまい、境界を越えて次のファイルのバイト列まで走査され
+        # 誤ったところで閉じ引用符と誤認識してクラッシュする不具合が
+        # 実際に発生した(toke.c:S_scan_strでのOut of memory)。
+        # 通常のread/statはentry.sizeまでしか見ないのでどちらも無関係。
+        $data .= $content . ";\0";
     }
 
     my $header_and_table_size = HEADER_SIZE + ENTRY_SIZE * scalar(@entries);

@@ -82,6 +82,32 @@ perl -0777 -pi -e 's/(Uid_t getuid \(void\);\nUid_t geteuid \(void\);\nGid_t get
 # arenaに積むbody_sizeはsizeof(NV)とsizeof(char*)の大きい方にする。
 perl -0777 -pi -e 's/\{ sizeof\(NV\), sizeof\(NV\), 0, SVt_NV, FALSE, HADNV, HASARENA,\n(\s*)FIT_ARENA\(0, sizeof\(NV\)\) \},/{ (sizeof(NV)<sizeof(char*)?sizeof(char*):sizeof(NV)), sizeof(NV), 0, SVt_NV, FALSE, HADNV, HASARENA,\n$1FIT_ARENA(0, (sizeof(NV)<sizeof(char*)?sizeof(char*):sizeof(NV))) },/' sv.c
 
+# pp_require を直接ROMFSに繋いでtrue zero-copyにするためのフック点。
+# romperlはpicoperl-5.12.5の.oをコピーせず参照するだけなので、picoperlと
+# romperlは同じupp_ctl.oを共有する。#ifdefでの出し分けができないため、
+# 「常にNULLを返す弱いシンボル」をここに置き、romperl側だけromfs_compile.o
+# の強いシンボルでリンク時に上書きする(picoperl.exeはromfs_compile.oを
+# リンクしないので弱いstubのまま=挙動は今まで通り変わらない)。
+perl -0777 -pi -e 's@(#endif /\* !PERL_DISABLE_PMC \*/\n\n)(PP\(pp_require\))@$1__attribute__((weak))\nconst void *\nromperl_find_for_compile(const char *name, unsigned long *out_len)\n{\n    PERL_UNUSED_ARG(name);\n    PERL_UNUSED_ARG(out_len);\n    return NULL;\n}\n\n$2@' pp_ctl.c
+
+# pp_require内でROMFSから見つけたソースを保持するSV変数を追加。
+perl -pi -e 's/(\s+SV \*hook_sv = NULL;)/$1\n    SV *romsv = NULL; \/* romperl: ROMFSから見つかったソース(ゼロコピー) *\//' pp_ctl.c
+
+# %INC確認の直後・@INC探索が始まる前にROMFSを直接調べる。見つかれば
+# romsvにSvLEN=0(所有権なし)のSVを組み立て、ROMFSイメージ上のバイト列を
+# 直接指す。tryrsfp/tryname周りの既存ロジックは変更せず、!romsvガードで
+# 素通りさせる(下のパッチ参照)。
+perl -0777 -pi -e 's@(\n    /\* prepare to compile file \*/\n)@\n    \/* romperl: INC探索より前にROMFSを直接調べる *\/\n    {\n        unsigned long romlen = 0;\n        const void *romptr = romperl_find_for_compile(name, \&romlen);\n        if (romptr) {\n            romsv = newSV_type(SVt_PV);\n            SvPV_set(romsv, (char *)romptr);\n            SvCUR_set(romsv, (STRLEN)romlen);\n            SvLEN_set(romsv, 0);\n            SvPOK_on(romsv);\n            tryname = name;\n        }\n    }\n$1@' pp_ctl.c
+
+# ROMFSで見つかった場合は「@INC探索に入る」条件と「見つからずDIEする」
+# 条件の両方(if (!tryrsfp) { が2箇所)をスキップさせる。
+perl -pi -e 's/if \(!tryrsfp\) \{/if (!tryrsfp \&\& !romsv) {/g' pp_ctl.c
+
+# lex_start()はline SVがSvREADONLYでなく最後のバイトが';'ならコピーせず
+# そのSVをそのまま使う(Perl_lex_start@toke.c)。romsvがあればそれを渡し、
+# lex_start内部でのSvREFCNT_inc分をここでdecして返す。
+perl -pi -e 's/(\s+)lex_start\(NULL, tryrsfp, TRUE\);/$1lex_start(romsv ? romsv : NULL, tryrsfp, TRUE);\n$1if (romsv) SvREFCNT_dec(romsv);/' pp_ctl.c
+
 make regen_uconfig
 make clean
 make -j"$JOBS" CC="$CC" LD="$CC" OPTIMIZE="$OPTIMIZE" LDFLAGS="$LDFLAGS"

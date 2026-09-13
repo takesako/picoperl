@@ -25,6 +25,14 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
   一括検証できる(`romfs_test`のAPI単体テスト13項目 +
   `test-inc-require.pl`のPerl統合4項目 + `test-float.pl`/`test-noproc.pl`の
   回帰確認)
+- `pp_require`を直接ROMFSに繋ぐtrue zero-copy化も完了(この時だけ
+  `picoperl-5.12.5/pp_ctl.c`をmake-picoperl.sh経由でパッチしている)。
+  `use strict; use warnings; use Carp;`実行時、ファイルサイズ分の
+  `malloc`が実測で1回も発生しないことを確認済み(旧`@INC`フック方式は
+  1回発生していた)。実装中に「Perlの文字列APIはSvCUR位置が読める
+  `'\0'`であることを前提にしている」という別の暗黙の前提を壊して
+  `Out of memory`クラッシュを起こす重大バグに遭遇し、修正済み
+  (詳細はPhase 4追加セクション参照)
 
 ## Phase 1: 足場固め
 
@@ -340,6 +348,128 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
         空になり動かなかったが、これはromperl固有ではなくpicoperl自体が
         `%ENV`を全く populate しない既存の特性だった。CGI.pm追加や
         ROMFS接続とは無関係の別課題としてPhase 5以降で扱う)
+
+### Phase 4 追加: pp_require を直接ROMFSに接続する true zero-copy化
+
+現行の`@INC`フック方式(`Romperl::Boot`)は`\$src`(スカラーリファレンス)を
+返し、`pp_require`はこれを`filter_cache`としてソースフィルタ経由で読む。
+このためモジュール本体は`sv_chop`が初回に呼ばれた時点で結局1回コピーされる
+(先の実測で確認済み)。5.12.5の`pp_ctl.c`を直接見ると、`@INC`探索を経ずに
+`lex_start(line_sv, NULL, TRUE)` を呼べば、`line_sv`が
+`SvREADONLY`でなく最後のバイトが`;`であれば`parser->linestr = line;`と
+そのSVをコピーせず直接使う分岐がある(`toke.c`の`Perl_lex_start`、
+`s[len-1] != ';'`チェック)。これを使い、`pp_require`自体をROMFSに
+直接繋げばファイルサイズ分のmalloc/copyを完全にゼロにできる。
+
+- [x] ROMFS側でファイルデータの直後にセンチネルを追加する
+      (`mkromfs.pl`: 各ファイルの内容を書き込んだ直後に`";\0"`(2byte)を
+      追加して`$data`に足す。`entry.size`は元のファイルサイズのまま
+      変更しないので、通常の`stat`/`read`には影響しない)
+      - 当初`;`1byteだけで実装したところ、後述の重大なクラッシュに
+        遭遇し、`\0`も必須と判明したため2byteに変更した(詳細は下記)
+- [x] `romfs.h`/`romfs.c`に`romfs_data_for_compile(path, &size)`を追加
+      (通常の`romfs_data()`と違い、返す`size`にセンチネル`;`を含める
+      = `entry->size + 1`。返り値のポインタ自体は同じ)
+- [x] `romperl/romfs_compile.c`を追加し、`const void
+      *romperl_find_for_compile(const char *name, unsigned long
+      *out_len)` を実装。`"lib/<name>"`をROMFSから探し、見つかれば
+      センチネル込みのポインタ/サイズを返す(`Romperl::Boot`の
+      `"lib/$filename"`命名規則と揃える)
+- [x] `picoperl-5.12.5/pp_ctl.c`の`pp_require`を`make-picoperl.sh`から
+      sedパッチした(直接編集すると次回ビルドで消えるため、これまでの
+      Phase2/3のパッチと同じ方式):
+      1. `romperl_find_for_compile`の**weakなstub**(常にNULLを返す)を
+         `pp_ctl.c`側に追加。`picoperl`はromperlのromfs_compile.oを
+         リンクしないのでこのstubのままリンクされ、挙動は一切変わらない。
+         `romperl`は同名の強いシンボルをromfs_compile.oからリンクし、
+         リンカが強いシンボルを優先するので上書きされる
+         (picoperlとromperlは`pp_ctl.c`由来の同じ`upp_ctl.o`を共有して
+         いる=`romperl/Makefile`が.oをコピーせず参照する設計のため、
+         コンパイル時の`#ifdef`分岐が使えない。weakシンボルによる
+         リンク時のオーバーライドが唯一の現実的な手段)
+      2. `pp_require`の変数宣言に`SV *romsv = NULL;`を追加
+      3. `%INC`チェック直後・INC探索開始前に、
+         `romperl_find_for_compile(name, &len)`を呼びROMFSに見つかれば
+         `romsv`(`SvLEN=0`の所有権なしSV、`SvPV_set`/`SvCUR_set`で
+         ROMFS上のバイト列に直接ポイント)を組み立てる
+      4. 既存の`if (!tryrsfp) {`(2箇所: INC探索に入る条件と、
+         見つからなかった時のDIE条件)を`if (!tryrsfp && !romsv) {`に
+         変更し、ROMFSで見つかった場合は両方スキップする
+      5. `lex_start(NULL, tryrsfp, TRUE);` を
+         `lex_start(romsv ? romsv : NULL, tryrsfp, TRUE); if (romsv)
+         SvREFCNT_dec(romsv);` に変更(lex_startが成功時に自分で
+         refcountを+1するので、呼び出し側は借りた分を返す)
+      - ハマった点: sedパッチのコメント文字列に生の`@INC`を書いたら、
+        Perlの置換式の中で配列`@INC`として補間され、ビルド環境の
+        システムperlの`@INC`一覧がコメントに埋め込まれてしまった
+        (機能的には無害だが見苦しいので"INC"表記に直した。以後
+        sedパッチのコメントに`@`から始まる語を書くときは要注意)
+- [x] `romperl/Makefile`に`romfs_compile.o`のビルド・リンクを追加
+      (perl.h不要なプレーンCなので`romfs.o`と同じ`$(OPTIMIZE)`のみで
+      コンパイル可)
+- [x] 動作確認: `picoperl`側は今まで通り全テストが通ること(weak stubが
+      常にNULLを返すだけなので不変)を回帰確認。`romperl`側は
+      `use feature 'say'; say 0.123;`、`use strict; use warnings; use
+      Carp;`の`croak`/`carp`/`confess`、`use CGI;`の`escapeHTML`が
+      引き続き動くこと、`test-inc-require.pl`/`test-float.pl`/
+      `test-noproc.pl`が通ることを確認
+- [x] **実測でのゼロコピー確認**: LD_PRELOAD mallocトレーサ(使い捨て、
+      コミットはしない)で`use strict; use warnings; use Carp;`実行時に、
+      Carp.pm(4517B)/Exporter.pm(1184B)/warnings.pm(10222B)/
+      strict.pm(576B)のいずれのサイズに一致する`malloc`も**1回も
+      発生しない**ことを確認した(旧filter_cache方式では各ファイルに
+      つき1回発生していたので、それがゼロになったことを実測で確認)
+
+### 実装中に遭遇した重大バグ: センチネル1byteだけでは不十分だった
+
+`;`1byteだけをセンチネルとして実装した最初のバージョンで、
+`require feature;`が`Out of memory!`で毎回クラッシュした。
+
+- LD_PRELOADの`malloc`/`realloc`トレーサで実際に失敗している呼び出しを
+  特定したところ、`realloc(ptr, 18446744073709551588)`
+  (=`(size_t)-28`、符号なし整数のアンダーフロー)を発見
+- gdbで`realloc`にサイズ引数の符号付き解釈が負になる条件でブレークし、
+  バックトレースを取得: `Perl_sv_grow` ← `S_scan_str`(`toke.c`) ←
+  `Perl_yylex` ← `Perl_yyparse` ← `S_doeval` ← `Perl_pp_require`
+- `S_scan_str`(文字列/正規表現などクォート構文全般の字句解析、
+  ヒアドキュメント固有ではない)に`fprintf`デバッグを仕込んで追跡した
+  結果、**ファイル内最後の引用符構文を走査する際に、閉じ引用符が
+  見つからないままバッファ終端(`PL_bufend`)を越えて走査し続ける**
+  ことが判明。ミニファイル済み/生の`feature.pm`のどちらでも、常に
+  ちょうど30バイト分バッファ終端を超えたところで見つかった
+- 原因: PerlのSV文字列は`SvPVX(sv)[SvCUR(sv)]`(=長さのちょうど1つ先)
+  が読める`'\0'`であることを内部の随所で前提にしている
+  (`toke.c`の`S_scan_str`が閉じ引用符を探す際の境界チェック等)。
+  センチネルを`;`1byteだけにしていたため、その1つ先の
+  バイト(`SvCUR`の位置)は**次のROMFSエントリの中身**になっており、
+  NULとは限らなかった。そのため閉じ引用符が見つからないまま
+  隣のファイルのバイト列を読み進め、たまたまそこにあった`'`等の
+  文字を閉じ引用符と誤認識するまで走査してしまい、結果として
+  巨大な(不正な)サイズでの`realloc`要求につながっていた
+- 修正: センチネルを`;`+`\0`の2byteに変更(`entry.size`はそのまま、
+  `romfs_data_for_compile`が返す`size`も`entry.size+1`のまま
+  変更不要。`\0`は`size+1`の"1つ先"に置かれ、報告されるサイズには
+  含めないが物理的に必ず存在するようにした)
+- 教訓: `lex_start()`のコピー回避条件(最後のバイトが`;`)だけでなく、
+  Perl文字列APIの「SvCUR位置は読める'\0'」という**別の**暗黙の
+  invariantも同時に満たす必要があった。ドキュメント化されていない
+  内部の前提を壊さないよう、こうした最適化には実測での検証
+  (今回はLD_PRELOADトレーサとgdbの条件付きブレークポイント)が
+  欠かせない
+
+- [ ] ヒアドキュメントを含む`.pm`をrequireした場合の動作確認はまだ
+      していない。上記の`\0`修正で境界超え自体は解消したはずだが、
+      ヒアドキュメント特有の「バッファを書き換える」処理
+      (`sv_chop`の昇格と同じ理屈で`SvLEN=0`から自動的にオウンド
+      コピーへ昇格する想定)が実際にクラッシュしないかは別途確認が要る
+- [ ] `__DATA__`は`PL_rsfp`(このパスでは常にNULL)を前提に
+      `Package::DATA`ハンドルが作られる実装のため、この方式では
+      `__DATA__`を持つモジュールは非対応になる。明示的にドキュメント化
+      する(現時点でROMFSに入れているモジュールはどれも`__DATA__`を
+      使っていないので実害なし)
+- [ ] 上記が安定したら、既存の`Romperl::Boot`(`@INC`フック)は
+      直接パスがカバーする範囲では二度と呼ばれなくなり冗長化する。
+      当面はフォールバックとして残すか、削除して一本化するかを判断する
 
 ## Phase 5: libc 依存の削減 → libc-pico2/ フォルダで *.h *.c を作成
 

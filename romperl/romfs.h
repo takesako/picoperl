@@ -8,13 +8,18 @@
  *   x86_64 (開発ホスト) も Cortex-M33 (RP2350, 実行ターゲット) も
  *   どちらもリトルエンディアンのため、バイトスワップ処理を持たない。
  *   他アーキテクチャに移植する場合はこの前提を見直すこと。
- * - 圧縮なし。ファイルデータはエントリ順に隙間なく連結されるだけ。
+ * - 圧縮なし。ファイルデータはエントリ順に連結されるが、各ファイルの直後に
+ *   ';' を1byteだけ挟む(entry.sizeには含めない、通常のread/statからは
+ *   見えない隠しパディング)。これは pp_require を直接ROMFSに繋ぐ経路
+ *   (romfs_data_for_compile)が、Perl 5.12.5のlex_start()のゼロコピー
+ *   分岐(入力の最後のバイトが';'ならSVをコピーしない)を満たすための
+ *   センチネル。
  * - read-only。書き込み・削除・追記は一切サポートしない。
  *
  * イメージ全体のレイアウト:
  *   [romfs_header]
  *   [romfs_entry] * header.file_count
- *   [ファイルデータ] (エントリ順に連結、パディング無し)
+ *   [ファイルデータ + ';'センチネル1byte] をエントリ順に連結
  */
 #ifndef PICOPERL_ROMFS_H
 #define PICOPERL_ROMFS_H
@@ -76,5 +81,14 @@ int  romfs_stat(const char *path, struct romfs_stat *out);
  * 見つからなければNULLを返す。
  */
 const void *romfs_data(const char *path, unsigned long *out_size);
+
+/*
+ * pp_require を直接ROMFSに繋ぐ経路専用。romfs_data() と同じポインタを
+ * 返すが、*out_size にはファイル直後の ';' センチネル1byteを含めた
+ * entry->size+1 を入れる(Perl 5.12.5 の lex_start() が「入力の最後の
+ * バイトが';'ならコピーせずそのSVを使う」という分岐を通るようにするため)。
+ * 見つからなければNULLを返す。
+ */
+const void *romfs_data_for_compile(const char *path, unsigned long *out_size);
 
 #endif /* PICOPERL_ROMFS_H */

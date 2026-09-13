@@ -20,18 +20,25 @@ all: romperl
 # romfs.o/romfs_data.oはromfs.h以外picoperlのヘッダに依存しないのでOPTIMIZEのみ
 # で足りるが、romfs_xs.oはperl.h/XSUB.hを使うためmain.cと同じCFLAGS
 # (PERL_CORE等)でコンパイルする。異なるdefineでABIがずれるのを防ぐため。
-romperl: uperlmain.o romfs.o romfs_data.o romfs_xs.o
+romperl: uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o
 	@if [ -z "$(strip $(PICOPERL_OBJS))" ]; then \
 		echo "error: $(PICOPERL_DIR)/*.o が無い。先に ../make-picoperl.sh を実行すること" >&2; \
 		exit 1; \
 	fi
-	$(CC) -o $@ uperlmain.o romfs.o romfs_data.o romfs_xs.o $(PICOPERL_OBJS) $(LDFLAGS) -lm
+	$(CC) -o $@ uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o $(PICOPERL_OBJS) $(LDFLAGS) -lm
 
 uperlmain.o: main.c romfs.h
 	$(CC) -c -o $@ $(CFLAGS) main.c
 
 romfs_xs.o: romfs_xs.c romfs.h
 	$(CC) -c -o $@ $(CFLAGS) romfs_xs.c
+
+# picoperl-5.12.5/pp_ctl.c (make-picoperl.shがパッチ)にある弱いシンボル
+# romperl_find_for_compile を、ここでリンクする強いシンボルで上書きし、
+# pp_requireを直接ROMFSに繋ぐ。perl.h不要のプレーンCなのでromfs.oと同じ
+# OPTIMIZEのみでコンパイル可。
+romfs_compile.o: romfs_compile.c romfs.h
+	$(CC) -c -o $@ $(OPTIMIZE) romfs_compile.c
 
 # rootfs/lib/*.pm は perl-5.12.5内の各*.pmを ../minify.pl (PPIでコメント/POD/
 # 空白を削るミニファイア) にかけて生成する。コミットはせず、ビルドの都度
@@ -106,7 +113,7 @@ test: romperl test-romfs test-inc-require
 	./romperl ../test-noproc.pl
 
 clean:
-	rm -f uperlmain.o romperl romfs.o romfs_data.o romfs_data.c root.romfs romfs_test.o romfs_test romfs_xs.o
+	rm -f uperlmain.o romperl romfs.o romfs_data.o romfs_data.c root.romfs romfs_test.o romfs_test romfs_xs.o romfs_compile.o
 	rm -f $(ROOTFS_PM)
 	rmdir rootfs/lib/Exporter rootfs/lib/warnings rootfs/lib/CGI rootfs/lib 2>/dev/null || true
 
