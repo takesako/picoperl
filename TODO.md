@@ -182,9 +182,15 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
         ファイルハンドルの代わりに「スカラーへのリファレンス1個」を返すと
         `filter_cache`としてソースフィルタ経由でそのまま読み込まれる—を
         使うことで解決。PerlIOを一切経由しない
-      - 検証: `use feature;`(romfs内`lib/feature.pm`のプレースホルダ)が
-        romperlでは成功し、ROMFSを持たないpicoperlでは
-        `Can't locate feature.pm` で失敗することを確認
+      - 検証: `romperl/rootfs/lib/feature.pm`は本物(perl-5.12.5本体の
+        `lib/feature.pm`をそのままコピー、プレースホルダではない)。
+        `use feature 'say'; say 0.123;` がROMFS経由で実行でき、実際に
+        `0.123`が出力されることを確認。ROMFSを持たないpicoperlでは
+        `Can't locate feature.pm` で失敗することも確認
+      - 参考: `use feature;`(引数無し)はfeature.pm自身の実装が
+        `croak("No features specified")`するため`Carp.pm`が要る。
+        `Carp.pm`はROMFSに入れていないため`Can't locate Carp.pm`で
+        失敗するが、これはROMFS接続とは無関係のfeature.pm自体の仕様
 * [x] テストファイルを作成しテストを組み込む
       → `romperl/test-inc-require.pl`(use経由のロード成功、`%INC`登録、
       存在しないモジュールは通常通り失敗して`@INC`探索が続くこと、の4項目)。
