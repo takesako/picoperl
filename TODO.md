@@ -883,7 +883,34 @@ project root、picoperl-5.12.5にコピーされ本物のlibc関数へパスス�
         引き続き影響する。直すには`perl.c`の該当ループを
         `PERL_MICRO`でも動くようパッチする必要があり、より踏み込んだ
         別作業として切り出す
-- [ ] `qsort` → `pp_sort.c` 内製ソートに、スタック領域が限られた簡易実装
+- [x] `qsort` → 内製の挿入ソート(`sort/sort.c`)に置き換えた(romperlのみ。
+      plain picoperlは今まで通り本物のlibc `qsort(3)`を使う。
+      `stat`/`unlink`/fopen系/`getenv`・`putenv`と同じ「弱いデフォルト
+      (project rootの`sort_shim.c`)+ romperl側の強い実装
+      (`sort/sort.c`)」の型)
+      - 呼び出し元を調査した結果、`nm -u picoperl`で実際にリンクされる
+        `qsort`の呼び出しは`op.c`の`tr///`(相補集合`c`修飾子)コンパイル
+        時、Unicode文字範囲リストをマージするための1箇所だけだった
+        (`pp_sort.c`はPerlの`sort`組み込み関数用に既に自前のソート
+        機構を持っており、libcの`qsort`は使っていない)
+      - 実装は挿入ソート(insertion sort)。`nmemb`は常に小さい
+        (ソース中の`tr///`文字範囲の個数程度)ためO(n^2)で実用上
+        問題にならず、再帰を一切使わないため組み込み環境で懸念される
+        「最悪ケースでのスタック深さの不確実性」(quicksort等)を
+        避けられる。要素1個分の一時バッファだけ`malloc`する
+        (要素サイズが可変のため固定長のスタックバッファでは対応
+        できない。`malloc`自体の置き換えは別のTODO項目)
+      - 動作確認: `nm -u romperl`から`qsort`が消え、`nm -u picoperl`には
+        本物のlibcシンボルとして残ることを確認(バイナリサイズも
+        本機能追加前と完全一致の909,072byte)。`tr/a-zA-Z0-9//cd`の
+        ような実際に`qsort`を経由するコードが正しく動くことを、
+        文字範囲をソース中で意図的に逆順(`tr/0-9a-zA-Z//cd`)に
+        書いた場合でも同じ結果になることまで確認し、実際に
+        並べ替えが機能していることを実証した
+      - `t/sort_test.c`(C単体9項目、`make -C sort test`): 空/単一要素/
+        既にソート済み/逆順/重複キー/安定性(stable sort、同じキーの
+        要素は元の相対順序を保つ)/`tr///`と同じ「要素サイズがint以外」
+        のケースを検証
 - [ ] `rand` / `srand` → 内製 PRNG に置き換える
 - [ ] `localtime` / `time` → `time64.c` + 固定エポックの時刻を返す
 - [ ] `malloc` / `calloc` / `realloc` / `free` → 固定ヒープアロケータ

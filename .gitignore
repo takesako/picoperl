@@ -15,5 +15,6 @@
 /vfs/vfs_test.romfs
 /vfs/vfs_test_romfs_data.c
 /env/env_test
+/sort/sort_test
 *.so
 core.*
