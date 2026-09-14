@@ -911,7 +911,29 @@ project root、picoperl-5.12.5にコピーされ本物のlibc関数へパスス�
         既にソート済み/逆順/重複キー/安定性(stable sort、同じキーの
         要素は元の相対順序を保つ)/`tr///`と同じ「要素サイズがint以外」
         のケースを検証
-- [ ] `rand` / `srand` → 内製 PRNG に置き換える
+- [x] `rand`/`srand` → 内製PRNG(`rand/rand.c`)に置き換えた(romperlのみ。
+      plain picoperlは今まで通り本物のlibc `rand(3)`/`srand(3)`を使う。
+      これまでと同じ「弱いデフォルト(project rootの`rand_shim.c`)+
+      romperl側の強い実装」の型)
+      - `pp_rand`/`pp_srand`(pp.c)は`uconfig.h`が生成する
+        `Drand01()`/`seedDrand01()`マクロ経由でlibcの`rand`/`srand`を
+        直接呼ぶだけの実装だった(`Drand01()=(rand()&0x7FFF)/(double)
+        (1<<15)`, `seedDrand01(x)=srand((Rand_seed_t)x)`)。`pp_sort.c`も
+        (Perlの`sort`組み込み関数のquicksort実装で、既にソート済みの
+        入力での最悪計算量を避けるための)ランダムなピボット選択に
+        同じ`Drand01()`を使っている
+      - 実装はANSI Cの教科書でよく引用される単純な線形合同法(LCG)。
+        Perlの`rand`は暗号用途ではないため、複雑なPRNGは不要と判断した
+      - 動作確認: `nm -u romperl`から`rand`/`srand`が消え、
+        `nm -u picoperl`には本物のlibcシンボルとして残ることを確認
+        (バイナリサイズも本機能追加前と完全一致の909,072byte)。
+        `srand(42); rand()`を2回同じ手順で実行し同じ数列が再現される
+        ことを、picoperl(本物のlibc経由)・romperl(自前PRNG経由)の
+        両方で確認(数列自体はアルゴリズムが違うため異なる値になるが、
+        どちらも決定的に再現される)
+      - `t/rand_test.c`(C単体4項目、`make -C rand test`): 値の範囲
+        ([0,32767])・同じseedでの再現性・違うseedでの非一致・
+        単純な非退化性(同じ値を返し続けないこと)を検証
 - [ ] `localtime` / `time` → `time64.c` + 固定エポックの時刻を返す
 - [ ] `malloc` / `calloc` / `realloc` / `free` → 固定ヒープアロケータ
 - [ ] `__ctype_b_loc` (locale 依存) を外す → `locale.c` の除去とセット

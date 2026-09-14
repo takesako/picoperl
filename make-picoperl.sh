@@ -32,6 +32,7 @@ cp -p ../posix_shim.c "../$OUT/"
 cp -p ../stdio_shim.c "../$OUT/"
 cp -p ../env_shim.c "../$OUT/"
 cp -p ../sort_shim.c "../$OUT/"
+cp -p ../rand_shim.c "../$OUT/"
 cp -p Makefile.micro "../$OUT/Makefile"
 
 cd "../$OUT"
@@ -84,6 +85,15 @@ perl -pi -e 's/(uuniversal\$\(_O\) uutf8\$\(_O\) uutil\$\(_O\) uperlapi\$\(_O\) 
 cat >> Makefile <<'EOF'
 usort_shim$(_O): $(HE) sort_shim.c
 	$(CC) $(CCFLAGS) -o $@ $(CFLAGS) sort_shim.c
+EOF
+# rand_shim.o: rand/srandを内製PRNG(romperl/rand/rand.c)に繋ぐための
+# 弱いデフォルト実装(本物のlibc rand(3)/srand(3)へのパススルー)。
+# env_shim.o/posix_shim.o/stdio_shim.o/sort_shim.oと同じ弱い/強い
+# シンボルの仕組み。
+perl -pi -e 's/(uuniversal\$\(_O\) uutf8\$\(_O\) uutil\$\(_O\) uperlapi\$\(_O\) uposix_shim\$\(_O\) ustdio_shim\$\(_O\) uenv_shim\$\(_O\) usort_shim\$\(_O\))/$1 urand_shim\$(_O)/' Makefile
+cat >> Makefile <<'EOF'
+urand_shim$(_O): $(HE) rand_shim.c
+	$(CC) $(CCFLAGS) -o $@ $(CFLAGS) rand_shim.c
 EOF
 perl -0777 -pi -e 's@(    /\* Unregister our signal handler.*?)(    exitstatus = perl_destruct)@#ifndef PERL_MICRO\n$1#endif\n$2@s' miniperlmain.c
 perl -MConfig -pi -e 's/^((?:short|int|long(?:dbl|long)?|ptr|double|[iun]v|u?quad|[iu]\d+|fpos|lseek)(?:size|type)|byteorder|d_quad|quadkind|use64.+|uidtype|gidtype)=.*/"$1=\x27$Config{$1}\x27"/e; s/^(d_const|i_unistd|i_fcntl)=.*/$1=\x27define\x27/' uconfig.sh
