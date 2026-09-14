@@ -11,8 +11,8 @@
  * fdopen/fopenを合わせて対応するまで保留)ため、今リダイレクトしても
  * 常に本物へパススルーするだけで意味が無い。
  */
-#ifndef PICOPERL_LIBC_PICO2_SYS_STAT_H
-#define PICOPERL_LIBC_PICO2_SYS_STAT_H
+#ifndef PICOPERL_LIBC_SYS_STAT_H
+#define PICOPERL_LIBC_SYS_STAT_H
 
 #include_next <sys/stat.h>
 
@@ -21,4 +21,4 @@ extern int picoperl_stat(const char *path, struct stat *st);
 #undef  stat
 #define stat(path, st) picoperl_stat((path), (st))
 
-#endif /* PICOPERL_LIBC_PICO2_SYS_STAT_H */
+#endif /* PICOPERL_LIBC_SYS_STAT_H */

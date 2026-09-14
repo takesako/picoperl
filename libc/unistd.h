@@ -5,14 +5,14 @@
  * 概念を前提とするlibc関数(fork/exec/pipe/sleep/getuid等)を「常に失敗する、
  * または固定値を返す」実装に差し替える。
  *
- * x86_64ホストではmake-picoperl.shが `-Ilibc-pico2` を最初のincludeパスに
+ * x86_64ホストではmake-picoperl.shが `-Ilibc` を最初のincludeパスに
  * 追加しているため、`#include <unistd.h>` はまずこのファイルを見つける。
  * ここでは #include_next で本物の <unistd.h> (close/read/write/lseek/
  * isatty/dup等、まだ必要な宣言) を読み込んだ上で、対象の関数だけを
  * 関数マクロで上書きする。
  */
-#ifndef PICOPERL_LIBC_PICO2_UNISTD_H
-#define PICOPERL_LIBC_PICO2_UNISTD_H
+#ifndef PICOPERL_LIBC_UNISTD_H
+#define PICOPERL_LIBC_UNISTD_H
 
 #include_next <unistd.h>
 #include <errno.h>
@@ -77,4 +77,4 @@ extern int  picoperl_unlink(const char *path);
 #undef  unlink
 #define unlink(path)            picoperl_unlink((path))
 
-#endif /* PICOPERL_LIBC_PICO2_UNISTD_H */
+#endif /* PICOPERL_LIBC_UNISTD_H */

@@ -12,7 +12,7 @@
  *   - 削除(unsetenv相当)は実装しない。このビルドは`d_unsetenv='undef'`
  *     でPerl側もunsetenvを呼ばないため不要
  *
- * picoperl_getenv/picoperl_putenvはlibc-pico2/stdlib.hから
+ * picoperl_getenv/picoperl_putenvはlibc/stdlib.hから
  * getenv/putenvの代わりに呼ばれる(picoperl本体・romperl両方が
  * 同じpicoperl-5.12.5/env.o経由でこれを使う。romfs/ramfs/vfsとは
  * 異なりromperl専用の強い実装への差し替えは無い、常にこの実装のみ)。

@@ -3643,7 +3643,7 @@ long vtohl(long n);
 
 #ifndef __cplusplus
 #if !(defined(UNDER_CE) || defined(SYMBIAN))
-#ifndef PICOPERL_LIBC_PICO2_UNISTD_H
+#ifndef PICOPERL_LIBC_UNISTD_H
 Uid_t getuid (void);
 Uid_t geteuid (void);
 Gid_t getgid (void);

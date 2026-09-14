@@ -14,13 +14,13 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
   precision テストを追加)。テスト一式は `t/` フォルダに集約済み(`test-float.pl`/
   `test-noproc.pl`/`test-inc-require.pl`/`romfs_test.c`/`malloctrace.c`/
   `test-zerocopy.sh`)
-- `libc-pico2/` フォルダ(Phase 5)で `fork`/`exec*`/`pipe`/`kill`/`wait*`/`sleep`/
+- `libc/` フォルダ(Phase 5)で `fork`/`exec*`/`pipe`/`kill`/`wait*`/`sleep`/
   `get{u,g,eu,eg}id`/`set{u,g}id` を無効化・固定値化。`./picoperl ../t/test-noproc.pl`
   も `ALL TESTS PASSED`
 - 未定義 libc シンボル: 85 個 (`nm -u picoperl`, Phase 1時点は96個)。`floor`/`ceil`/
   `fmod` の double 版は `time64.c`(Unixエポック秒→暦分解、Perlの NV とは無関係)
   でのみ直接呼ばれており、doubleが本質的に必要と判明・調査済みでクローズ
-- `getenv`/`putenv`をlibcに依存しない自前実装(`env/env.c`、"NAME=VALUE"を
+- `getenv`/`putenv`をlibcに依存しない自前実装(`libc/env.c`、"NAME=VALUE"を
   丸ごと保持する単方向リスト)に置き換え済み。**romperl限定**(plain
   picoperlは今まで通り本物のlibc getenv/putenvを使う。`stat`/`unlink`/
   fopen系と同じ「弱いデフォルト+romperl側の強い実装」の型に統一。
@@ -646,7 +646,7 @@ romfs(読み取り専用)とramfs(書き込み可能)をPerl/PerlIOから見て1
       予告していた副次効果も実際に確認できた):
       - `pp_require`の直結zero-copyパス(romfsのみ見る)はそのまま。
         そこでromfsに見つからなかった場合の`@INC`探索フォールバック
-        (通常の`open`相当、実体は`fopen`)が`libc-pico2/stdio.h`経由で
+        (通常の`open`相当、実体は`fopen`)が`libc/stdio.h`経由で
         `vfs_fopen`に繋がったことで、実行時にramfsへ書かれた
         モジュールも`require`できるようになった
       - **動作確認中に見つけた実バグ**: `open(my $fh,'>','Foo.pm')`で
@@ -664,7 +664,7 @@ romfs(読み取り専用)とramfs(書き込み可能)をPerl/PerlIOから見て1
         確認する統合テスト2項目を追加。既存の全テストもパスすること
         を確認
 
-## Phase 5: libc 依存の削減 → libc-pico2/ フォルダで *.h *.c を作成
+## Phase 5: libc 依存の削減 → libc/ フォルダで *.h *.c を作成
 
 **方針の確認(env周りの実装ミスから学んだ教訓)**: libc依存を削る対象は
 基本的に **romperl側だけでよい**。plain picoperlはNV=floatにする最小
@@ -679,18 +679,18 @@ project root、picoperl-5.12.5にコピーされ本物のlibc関数へパスス�
 一貫して適用する。plain picoperl自身の`.c`(`miniperlmain.c`等)を
 直接編集・拡張する必要は無いはず、という前提で見直しながら進める。
 
-- [x] `#include <*.h>` で `../libc-pico2/` フォルダが優先されて読み込まれるように
-      → `make-picoperl.sh` の `OPTIMIZE` に `-I../libc-pico2` を追加を確認
+- [x] `#include <*.h>` で `../libc/` フォルダが優先されて読み込まれるように
+      → `make-picoperl.sh` の `OPTIMIZE` に `-I../libc` を追加を確認
 - [x] プロセス系を無効: `fork` `execl` `execv` `execvp` `wait` `kill` `pipe`
       `sleep` `getpid` `getuid` `geteuid` `getgid` `getegid` `setuid` `setgid`
-      (主に `pp_sys.c` / `doio.c`) → `libc-pico2/unistd.h` / `signal.h` /
+      (主に `pp_sys.c` / `doio.c`) → `libc/unistd.h` / `signal.h` /
       `sys/wait.h` で常にエラー(`errno=ENOSYS`)または固定値を返すマクロに
       置き換えた。`test-noproc.pl` を追加して `make-picoperl.sh` から自動実行。
       `nm -u` の未定義シンボル数: 104 → 88 個
-  - `libc-pico2/unistd.h`: `fork`/`execl`/`execv`/`execvp`/`pipe`/`sleep`/
+  - `libc/unistd.h`: `fork`/`execl`/`execv`/`execvp`/`pipe`/`sleep`/
     `getpid`(→1)/`getuid`/`geteuid`/`getgid`/`getegid`(→0)/`setuid`/`setgid`
-  - `libc-pico2/signal.h`: `kill`/`killpg`
-  - `libc-pico2/sys/wait.h`: `wait`/`waitpid`
+  - `libc/signal.h`: `kill`/`killpg`
+  - `libc/sys/wait.h`: `wait`/`waitpid`
   - ハマった点1: `perl.h` が `Uid_t getuid (void);` のように getuid 等を
     無条件に素のプロトタイプ再宣言している。関数マクロはコール式だけでなく
     宣言文中の同名トークンも展開してしまい `Uid_t ((uid_t)0);` のような
@@ -700,10 +700,10 @@ project root、picoperl-5.12.5にコピーされ本物のlibc関数へパスス�
     `#ifndef PICOPERL_LIBC_PICO2_UNISTD_H` で無効化する追加パッチが必要だった
   - ハマった点2: `i_syswait='undef'` のため `<sys/wait.h>` がどこからも
     include されておらず、`wait()` が暗黙宣言のまま本物のlibc関数を直接
-    呼んでいた(`libc-pico2/sys/wait.h` を置いても include されなければ
+    呼んでいた(`libc/sys/wait.h` を置いても include されなければ
     差し替わらない)。`uconfig.sh` の `i_syswait` を `define` にして
     `#include <sys/wait.h>` を実際に通るようにして解決
-  - `kill(0,$$)` は `libc-pico2/signal.h` の前に `doio.c` の `apply()` が
+  - `kill(0,$$)` は `libc/signal.h` の前に `doio.c` の `apply()` が
     `#ifndef HAS_KILL` で "The kill function is unimplemented" と die する
     既存の仕組みが先に効いていた(`d_kill='undef'` のため)。signal.h の
     シムは `apply()` を経由しない直接呼び出し経路への保険として残す
@@ -732,8 +732,8 @@ project root、picoperl-5.12.5にコピーされ本物のlibc関数へパスス�
       `open`/`close`/`read`/`write`/`lseek`/`fstat`は次項と統合して保留。
       `opendir`/`readdir`/`closedir`/`chdir`/`chmod`/`rename`/`umask`/
       `dup`/`isatty`/`tmpfile`は未着手)
-      - `libc-pico2/sys/stat.h`(新規)で`stat()`(パス名ベース)を
-        `picoperl_stat()`に、`libc-pico2/unistd.h`で`unlink()`を
+      - `libc/sys/stat.h`(新規)で`stat()`(パス名ベース)を
+        `picoperl_stat()`に、`libc/unistd.h`で`unlink()`を
         `picoperl_unlink()`にリダイレクト。実体は`posix_shim.c`
         (project root、`make-picoperl.sh`が`picoperl-5.12.5/`にコピーし
         `Makefile`に`uposix_shim$(_O)`としてビルドルールを追加)の
@@ -767,7 +767,7 @@ project root、picoperl-5.12.5にコピーされ本物のlibc関数へパスス�
         `fclose`/`fseek`等、次のTODO項目そのもの)を同時にvfs対応
         させない限り、`open`/`close`/`read`/`write`/`lseek`(と、
         vfs経由のfdが存在しないと無意味な`fstat`)は動かせないと判断し、
-        `libc-pico2/fcntl.h`(削除)・`vfs_posix.c`の該当実装を全て
+        `libc/fcntl.h`(削除)・`vfs_posix.c`の該当実装を全て
         引き上げ、`stat`/`unlink`(パス名だけで完結しfd/FILE*を経由
         しない)だけを残した
       - この発見により、TODOの元の想定(「ファイル系をROMFS前提に」→
@@ -790,7 +790,7 @@ project root、picoperl-5.12.5にコピーされ本物のlibc関数へパスス�
         `lseek`)や`fdopen()`を一切経由しない。これらを経由するのは
         `sysopen`(数値モードのopen)だけであり、それは対象外として
         割り切れる、という設計の裏付けが取れた
-      - `libc-pico2/stdio.h`(新規)で各関数をリダイレクト。実体は
+      - `libc/stdio.h`(新規)で各関数をリダイレクト。実体は
         `stdio_shim.c`(project root、`posix_shim.c`と同じ手順で
         `make-picoperl.sh`が`picoperl-5.12.5/`にコピーし
         `ustdio_shim$(_O)`としてビルド)の弱いデフォルト実装と、
@@ -826,7 +826,7 @@ project root、picoperl-5.12.5にコピーされ本物のlibc関数へパスス�
         plain picoperlは無変更(既存回帰テスト全てパス)
 - [x] `getenv`/`putenv`をlibcに依存しない自前実装に置き換えた(romperlのみ。
       plain picoperlは今まで通り本物のlibc `getenv`/`putenv`を使う)
-      (`env/env.c`: "NAME=VALUE"文字列をエントリ丸ごと保持する単方向
+      (`libc/env.c`: "NAME=VALUE"文字列をエントリ丸ごと保持する単方向
       リスト。putenv(3)と同じ契約で、渡された文字列の所有権を受け取り
       以後freeしない=「freeしないハッシュに格納する」という元の方針通り)
       - **当初picoperl/romperl共通の実装にしてしまい、ユーザー指摘で
@@ -835,12 +835,12 @@ project root、picoperl-5.12.5にコピーされ本物のlibc関数へパスス�
         方針が明確になったため、`stat`/`unlink`/fopen系と同じ
         「弱いデフォルト(project rootの`env_shim.c`、本物の
         `getenv`/`putenv`へのパススルー)+ romperl側の強い実装
-        (`env/env.c`、リンク時に上書き)」という型に作り直した。
+        (`libc/env.c`、リンク時に上書き)」という型に作り直した。
         `env_shim.c`は`picoperl-5.12.5`自身のビルドに組み込まれ
         (`make-picoperl.sh`がコピー+Makefileルール追加)、
-        `env/env.c`は`romperl/Makefile`が直接コンパイルしてリンクする
+        `libc/env.c`は`romperl/Makefile`が直接コンパイルしてリンクする
         (`vfs_posix.o`/`vfs_stdio.o`と同じ扱い)
-      - `libc-pico2/stdlib.h`(新規)で`getenv`/`putenv`を
+      - `libc/stdlib.h`(新規)で`getenv`/`putenv`を
         `picoperl_getenv`/`picoperl_putenv`にリダイレクト。
         `setenv`/`unsetenv`は対象外(`d_unsetenv='undef'`でPerl側も
         呼ばない)
@@ -863,7 +863,7 @@ project root、picoperl-5.12.5にコピーされ本物のlibc関数へパスス�
         自前getenvが実際にperl.c内部から参照されていることを確認
         (picoperl側でも同じ挙動になることを、本物のlibc経由で別途確認)。
         `$ENV{X}="y"; print $ENV{X}`のスクリプト内往復も両方で確認
-      - `t/env_test.c`(C単体16項目、`make -C env test`。env.c自体は
+      - `t/env_test.c`(C単体16項目、`make -C libc test`。env.c自体は
         picoperl/romperlどちらにも依存しない独立モジュールなので単体
         テストは引き続き有効)+ `t/test-env.pl`(Perl統合3項目、
         `make-picoperl.sh`末尾と`make -C romperl test`両方で自動実行。
@@ -883,11 +883,59 @@ project root、picoperl-5.12.5にコピーされ本物のlibc関数へパスス�
         引き続き影響する。直すには`perl.c`の該当ループを
         `PERL_MICRO`でも動くようパッチする必要があり、より踏み込んだ
         別作業として切り出す
-- [x] `qsort` → 内製の挿入ソート(`sort/sort.c`)に置き換えた(romperlのみ。
+
+### Phase 5 追加: libc-pico2/ → libc/ にリネームし、env/sort/rand/time
+### モジュールもフォルダ分けせず直下に統合
+
+`env/`・`sort/`・`rand/`・`time/`という4つの独立フォルダに分かれていた
+libc代替モジュールを、既存の`libc-pico2/`(*.hのシムヘッダを置く場所)に
+名前を合わせて`libc/`にリネームした上で、4モジュールの実装ファイルも
+すべて`libc/`直下にフラットに統合した(サブフォルダは作らない)。
+
+- [x] `libc-pico2/` → `libc/`(`git mv`でリネーム)
+- [x] `env/env.c`・`env/env.h` → `libc/env.c`・`libc/env.h`
+      (`sort/`・`rand/`・`time/`も同様に`libc/sort.c`・`libc/rand.c`・
+      `libc/picotime.c`等へ移動。`time/picotime.h`のファイル名は
+      そのまま維持(`libc/time.h`という本物のシムヘッダと同じ
+      ディレクトリに置かれることになるため、"time.h"に戻すと
+      以前ハマった自己衝突が再発する。「本物のシムヘッダと同じ場所に
+      置かれても衝突しない名前にする」という制約が今回の統合で
+      むしろ重要性を増した)
+- [x] `env/Makefile`・`sort/Makefile`・`rand/Makefile`・`time/Makefile`の
+      4つを1つの`libc/Makefile`に統合(`test`ターゲットで4つの単体テスト
+      バイナリを全部ビルド・実行する)
+- [x] `romperl/Makefile`の`ENV_DIR`/`SORT_DIR`/`RAND_DIR`/`TIME_DIR`の
+      4変数を`LIBC_DIR = ../libc`1つに統合。include pathも
+      `-I../libc-pico2 -I../env -I../sort -I../rand -I../time`だったのが
+      `-I../libc`1つで足りるようになった
+      (env.o/sort.o/rand.o/time.oの各ビルドルールも`$(LIBC_DIR)/*.c`
+      を参照するよう更新)
+- [x] **重要な見落としを検出・修正**: `libc-pico2/unistd.h`の
+      インクルードガードマクロ`PICOPERL_LIBC_PICO2_UNISTD_H`を
+      `PICOPERL_LIBC_UNISTD_H`にリネームする際、`make-picoperl.sh`が
+      `perl.h`にパッチする側(`getuid`等の再宣言を無効化するガード、
+      Phase 5の「ハマった点1」参照)でも**同じ文字列を直接埋め込んで
+      いる**ことに気づかず放置すると、ガードの対応が取れなくなり
+      Phase 5最初期に直した「getuidマクロ展開による再宣言破壊」の
+      バグが復活するところだった。`make-picoperl.sh`側のリテラル
+      文字列も同時に書き換えて対応を確認した
+- [x] 全ファイル(`*_shim.c`のコメント、`libc/*.h`のコメント、
+      `vfs/vfs_posix.h`・`vfs/vfs_stdio.h`・`ramfs/ramfs.h`等の
+      "libc-pico2"という単語を含むコメント、TODO.md自身)を一括で
+      `libc-pico2`→`libc`、`env/env.c`→`libc/env.c`等に置換
+- [x] 動作確認: `./make-picoperl.sh`(plain picoperl、バイナリサイズ
+      909,072byte で完全一致)、`make -C romperl test`(全項目)、
+      `make -C libc test`(env/sort/rand/time合わせて42項目)、
+      `make -C vfs test`、`make -C ramfs test`が全てパスすることを確認。
+      `nm -u romperl`から`getenv`/`putenv`/`qsort`/`rand`/`srand`/
+      `time`/`localtime`/`stat`/`unlink`が引き続き消えていること
+      (今回のリネームでリンクの出し分けが壊れていないこと)も再確認した
+
+- [x] `qsort` → 内製の挿入ソート(`libc/sort.c`)に置き換えた(romperlのみ。
       plain picoperlは今まで通り本物のlibc `qsort(3)`を使う。
       `stat`/`unlink`/fopen系/`getenv`・`putenv`と同じ「弱いデフォルト
       (project rootの`sort_shim.c`)+ romperl側の強い実装
-      (`sort/sort.c`)」の型)
+      (`libc/sort.c`)」の型)
       - 呼び出し元を調査した結果、`nm -u picoperl`で実際にリンクされる
         `qsort`の呼び出しは`op.c`の`tr///`(相補集合`c`修飾子)コンパイル
         時、Unicode文字範囲リストをマージするための1箇所だけだった
@@ -907,11 +955,11 @@ project root、picoperl-5.12.5にコピーされ本物のlibc関数へパスス�
         文字範囲をソース中で意図的に逆順(`tr/0-9a-zA-Z//cd`)に
         書いた場合でも同じ結果になることまで確認し、実際に
         並べ替えが機能していることを実証した
-      - `t/sort_test.c`(C単体9項目、`make -C sort test`): 空/単一要素/
+      - `t/sort_test.c`(C単体9項目、`make -C libc test`): 空/単一要素/
         既にソート済み/逆順/重複キー/安定性(stable sort、同じキーの
         要素は元の相対順序を保つ)/`tr///`と同じ「要素サイズがint以外」
         のケースを検証
-- [x] `rand`/`srand` → 内製PRNG(`rand/rand.c`)に置き換えた(romperlのみ。
+- [x] `rand`/`srand` → 内製PRNG(`libc/rand.c`)に置き換えた(romperlのみ。
       plain picoperlは今まで通り本物のlibc `rand(3)`/`srand(3)`を使う。
       これまでと同じ「弱いデフォルト(project rootの`rand_shim.c`)+
       romperl側の強い実装」の型)
@@ -931,10 +979,10 @@ project root、picoperl-5.12.5にコピーされ本物のlibc関数へパスス�
         ことを、picoperl(本物のlibc経由)・romperl(自前PRNG経由)の
         両方で確認(数列自体はアルゴリズムが違うため異なる値になるが、
         どちらも決定的に再現される)
-      - `t/rand_test.c`(C単体4項目、`make -C rand test`): 値の範囲
+      - `t/rand_test.c`(C単体4項目、`make -C libc test`): 値の範囲
         ([0,32767])・同じseedでの再現性・違うseedでの非一致・
         単純な非退化性(同じ値を返し続けないこと)を検証
-- [x] `time`/`localtime` → 内製実装(`time/picotime.c`)に置き換えた
+- [x] `time`/`localtime` → 内製実装(`libc/picotime.c`)に置き換えた
       (romperlのみ。plain picoperlは今まで通り本物のlibc `time(3)`/
       `localtime(3)`を使う。これまでと同じ「弱いデフォルト
       (project rootの`time_shim.c`)+ romperl側の強い実装」の型)
@@ -967,12 +1015,12 @@ project root、picoperl-5.12.5にコピーされ本物のlibc関数へパスス�
         このファイル自身を再帰的にincludeしてしまい
         (`error: unknown type name 'time_t'`等で発覚)、ビルドが
         壊れた。ファイル名を`picotime.h`/`picotime.c`に変更して回避した
-        (libc-pico2内のシムは`#include_next`で回避しているが、
+        (libc内のシムは`#include_next`で回避しているが、
         こちらは単なる`-I`ディレクトリなのでその仕組みが使えないため)
       - 動作確認: `nm -u romperl`から`time`/`localtime`が消え、
         `nm -u picoperl`には本物のlibcシンボルとして残ることを確認
         (バイナリサイズも本機能追加前と完全一致の909,072byte)。
-        `t/time_test.c`(C単体13項目、`make -C time test`)で
+        `t/time_test.c`(C単体13項目、`make -C libc test`)で
         `picoperl_localtime()`を本物の`gmtime(3)`と突き合わせ、
         エポック境界・うるう年(2000年=100の倍数だが400の倍数なので
         うるう年、2024年=通常のうるう年)・2038年問題境界・1970年より前

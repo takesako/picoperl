@@ -1,6 +1,6 @@
 /*
  * vfs_posix.h - vfs.h(romfs+ramfsディスパッチ)をPOSIX風のstat/unlinkと
- * して使えるようにする薄いラッパー。libc-pico2の*.hシムが差し替える
+ * して使えるようにする薄いラッパー。libcの*.hシムが差し替える
  * stat/unlinkの実体をここに置く。
  *
  * stat/unlinkはパス名だけを扱いfd/FILE*を経由しないため、単独でvfs
@@ -12,7 +12,7 @@
  * fseek等)を合わせてvfs対応させる(次のTODO項目「stdioをPerlIO経由で
  * UARTに直結」)まで、fd経由の操作は全て保留する。
  *
- * この宣言はlibc-pico2側にも(cross-includeを避けるため)重複して
+ * この宣言はlibc側にも(cross-includeを避けるため)重複して
  * externで書かれている。シグネチャを変える場合は両方直すこと。
  */
 #ifndef VFS_POSIX_H

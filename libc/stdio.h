@@ -16,8 +16,8 @@
  * 前提とする関数で、vfs経由のfdという概念自体が無い。tmpfileは
  * 未対応のまま今まで通り本物の一時ファイルを使う)。
  */
-#ifndef PICOPERL_LIBC_PICO2_STDIO_H
-#define PICOPERL_LIBC_PICO2_STDIO_H
+#ifndef PICOPERL_LIBC_STDIO_H
+#define PICOPERL_LIBC_STDIO_H
 
 #include_next <stdio.h>
 
@@ -65,4 +65,4 @@ extern int    picoperl_fprintf(FILE *fp, const char *format, ...);
 #undef  fprintf
 #define fprintf(...)                   picoperl_fprintf(__VA_ARGS__)
 
-#endif /* PICOPERL_LIBC_PICO2_STDIO_H */
+#endif /* PICOPERL_LIBC_STDIO_H */

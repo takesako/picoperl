@@ -8,13 +8,10 @@
 PICOPERL_DIR = ../picoperl-5.12.5
 RAMFS_DIR = ../ramfs
 VFS_DIR = ../vfs
-ENV_DIR = ../env
-SORT_DIR = ../sort
-RAND_DIR = ../rand
-TIME_DIR = ../time
+LIBC_DIR = ../libc
 CC = cc
 OPTIMIZE = -Os -std=gnu89 -DNO_MATHOMS -flto -ffunction-sections -fdata-sections \
-	-I../libc-pico2 -I$(PICOPERL_DIR) -I$(RAMFS_DIR) -I$(VFS_DIR) -I$(ENV_DIR) -I$(SORT_DIR) -I$(RAND_DIR) -I$(TIME_DIR) -I.
+	-I$(LIBC_DIR) -I$(PICOPERL_DIR) -I$(RAMFS_DIR) -I$(VFS_DIR) -I.
 CFLAGS = -DPERL_CORE -DPERL_MICRO -DSTANDARD_C -DPERL_USE_SAFE_PUTENV $(OPTIMIZE)
 LDFLAGS = -flto=auto -Wl,--gc-sections
 
@@ -45,7 +42,7 @@ romperl: uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o ramfs.o vfs
 	fi
 	$(CC) -o $@ uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o ramfs.o vfs.o vfs_posix.o vfs_stdio.o env.o sort.o rand.o time.o $(PICOPERL_OBJS) $(LDFLAGS) -lm
 
-uperlmain.o: main.c romfs.h $(ENV_DIR)/env.h
+uperlmain.o: main.c romfs.h $(LIBC_DIR)/env.h
 	$(CC) -c -o $@ $(CFLAGS) main.c
 
 romfs_xs.o: romfs_xs.c romfs.h
@@ -126,26 +123,22 @@ vfs_posix.o: $(VFS_DIR)/vfs_posix.c $(VFS_DIR)/vfs_posix.h $(VFS_DIR)/vfs.h
 vfs_stdio.o: $(VFS_DIR)/vfs_stdio.c $(VFS_DIR)/vfs_stdio.h $(VFS_DIR)/vfs.h
 	$(CC) -c -o $@ $(OPTIMIZE) $(VFS_DIR)/vfs_stdio.c
 
-# env.o: libcのgetenv/putenvに依存しない環境変数ストア(../env/env.c)の
-# 強い実装。romfs/ramfs/vfsとは無関係の独立したモジュールだが、同じ
-# 弱い/強いシンボルの仕組みでpicoperl-5.12.5/env_shim.oを上書きする。
-env.o: $(ENV_DIR)/env.c $(ENV_DIR)/env.h
-	$(CC) -c -o $@ $(OPTIMIZE) $(ENV_DIR)/env.c
+# env.o/sort.o/rand.o/time.oは、libc/(getenv・putenv・qsort・rand・
+# srand・time・localtimeに依存しない自前実装。*.hのlibcシムと同じ
+# ../libc/ に置かれている)の強い実装。romfs/ramfs/vfsとは無関係の
+# 独立したモジュールだが、同じ弱い/強いシンボルの仕組みで
+# picoperl-5.12.5/*_shim.oを上書きする。
+env.o: $(LIBC_DIR)/env.c $(LIBC_DIR)/env.h
+	$(CC) -c -o $@ $(OPTIMIZE) $(LIBC_DIR)/env.c
 
-# sort.o: libcのqsort(3)に依存しない挿入ソート(../sort/sort.c)の強い
-# 実装。env.oと同じく他のromfs/ramfs/vfsとは無関係の独立したモジュール。
-sort.o: $(SORT_DIR)/sort.c $(SORT_DIR)/sort.h
-	$(CC) -c -o $@ $(OPTIMIZE) $(SORT_DIR)/sort.c
+sort.o: $(LIBC_DIR)/sort.c $(LIBC_DIR)/sort.h
+	$(CC) -c -o $@ $(OPTIMIZE) $(LIBC_DIR)/sort.c
 
-# rand.o: libcのrand(3)/srand(3)に依存しないPRNG(../rand/rand.c)の
-# 強い実装。env.o/sort.oと同じく独立したモジュール。
-rand.o: $(RAND_DIR)/rand.c $(RAND_DIR)/rand.h
-	$(CC) -c -o $@ $(OPTIMIZE) $(RAND_DIR)/rand.c
+rand.o: $(LIBC_DIR)/rand.c $(LIBC_DIR)/rand.h
+	$(CC) -c -o $@ $(OPTIMIZE) $(LIBC_DIR)/rand.c
 
-# time.o: libcのtime(3)/localtime(3)に依存しない実装(../time/picotime.c)
-# の強い実装。env.o/sort.o/rand.oと同じく独立したモジュール。
-time.o: $(TIME_DIR)/picotime.c $(TIME_DIR)/picotime.h
-	$(CC) -c -o $@ $(OPTIMIZE) $(TIME_DIR)/picotime.c
+time.o: $(LIBC_DIR)/picotime.c $(LIBC_DIR)/picotime.h
+	$(CC) -c -o $@ $(OPTIMIZE) $(LIBC_DIR)/picotime.c
 
 # romfs.c/romfs_data.cのAPI単体テスト (Perl統合前の動作確認用)。
 # t/romfs_test.c は romfs.h に依存するので -I. でカレントディレクトリ

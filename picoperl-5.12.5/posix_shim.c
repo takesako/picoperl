@@ -1,7 +1,7 @@
 /*
  * posix_shim.c - plain picoperl向けの既定実装。
  *
- * libc-pico2/sys/stat.h・unistd.h は stat/unlink を picoperl_stat()等に
+ * libc/sys/stat.h・unistd.h は stat/unlink を picoperl_stat()等に
  * リダイレクトする関数マクロを定義している。この既定実装は「常に本物の
  * システムコールへそのまま委譲するだけ」のパススルーで、plain picoperl
  * の挙動は今までと一切変わらない。
@@ -21,7 +21,7 @@
  * リンク時解決に頼っている。
  *
  * 呼び出し先を`(stat)(...)`のように余分な括弧で囲っているのは、
- * libc-pico2/*.hが同名を関数マクロに置き換えているため、素の
+ * libc/*.hが同名を関数マクロに置き換えているため、素の
  * `stat(...)`と書くと自分自身(picoperl_stat)を再帰呼び出ししてしまう
  * のを防ぐため(関数マクロは「識別子の直後に'('」が展開条件のため、
  * `(stat)`のように直後が'('でなければ展開されず本物のシンボルを指す)。

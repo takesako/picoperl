@@ -1,6 +1,6 @@
 /*
  * vfs_stdio.h - vfs.h(romfs+ramfsディスパッチ)をlibcのfopen系APIとして
- * 使えるようにする薄いラッパー。libc-pico2/stdio.hが差し替える
+ * 使えるようにする薄いラッパー。libc/stdio.hが差し替える
  * fopen/fclose/fread/fwrite/fseek/ftell/feof/ferror/clearerr/fflush/
  * fgetc/fputs/fileno/fprintfの実体をここに置く。
  *

@@ -1,12 +1,12 @@
 /*
  * sort_shim.c - plain picoperl向けの既定実装。
  *
- * libc-pico2/stdlib.h は qsort を picoperl_qsort() にリダイレクトする
+ * libc/stdlib.h は qsort を picoperl_qsort() にリダイレクトする
  * 関数マクロを定義している。この既定実装は「常に本物のlibc qsort(3)へ
  * そのまま委譲するだけ」のパススルーで、plain picoperlの挙動は今までと
  * 一切変わらない。
  *
- * __attribute__((weak))にしているのは、romperl(../sort/sort.c)が
+ * __attribute__((weak))にしているのは、romperl(../libc/sort.c)が
  * 同名の強いシンボルでリンク時に上書きし、libcに依存しない自前の
  * 挿入ソートに差し替えられるようにするため。romperlはpicoperl-5.12.5の
  * .oをコピーせず参照するだけなので(このファイルも例外ではない)、
@@ -16,7 +16,7 @@
  * stdio_shim.cと同じ仕組み)。
  *
  * 呼び出し先を`(qsort)(...)`のように余分な括弧で囲っているのは、
- * libc-pico2/stdlib.hが同名を関数マクロに置き換えているため、素の
+ * libc/stdlib.hが同名を関数マクロに置き換えているため、素の
  * `qsort(...)`と書くと自分自身(picoperl_qsort)を再帰呼び出しして
  * しまうのを防ぐため。
  */

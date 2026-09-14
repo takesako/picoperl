@@ -1,10 +1,10 @@
 /*
  * picoperl向けlibcシム: <stdlib.h>
  *
- * getenv()/putenv()をpicoperl自前の環境変数ストア(romperl/env/env.c)
+ * getenv()/putenv()をpicoperl自前の環境変数ストア(libc/env.c)
  * 経由のpicoperl_getenv()/picoperl_putenv()に、qsort()を内製の
- * 挿入ソート(romperl/sort/sort.c)経由のpicoperl_qsort()に、
- * rand()/srand()を内製のPRNG(romperl/rand/rand.c)経由の
+ * 挿入ソート(libc/sort.c)経由のpicoperl_qsort()に、
+ * rand()/srand()を内製のPRNG(libc/rand.c)経由の
  * picoperl_rand()/picoperl_srand()にリダイレクトする。
  *
  * setenv()/unsetenv()は対象外(このビルドは`d_unsetenv='undef'`で
@@ -19,8 +19,8 @@
  * picoperlはenv_shim.c/sort_shim.c/rand_shim.cの弱いデフォルトが
  * そのまま使われるため無変更。
  */
-#ifndef PICOPERL_LIBC_PICO2_STDLIB_H
-#define PICOPERL_LIBC_PICO2_STDLIB_H
+#ifndef PICOPERL_LIBC_STDLIB_H
+#define PICOPERL_LIBC_STDLIB_H
 
 #include_next <stdlib.h>
 
@@ -42,4 +42,4 @@ extern int  picoperl_rand(void);
 #undef  rand
 #define rand(...)         picoperl_rand()
 
-#endif /* PICOPERL_LIBC_PICO2_STDLIB_H */
+#endif /* PICOPERL_LIBC_STDLIB_H */

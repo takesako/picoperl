@@ -1,7 +1,7 @@
 /*
  * stdio_shim.c - plain picoperl向けの既定実装。
  *
- * libc-pico2/stdio.h は fopen/fclose/fread/fwrite/fseek/ftell/feof/
+ * libc/stdio.h は fopen/fclose/fread/fwrite/fseek/ftell/feof/
  * ferror/clearerr/fflush/fgetc/fputs/fileno/fprintf を picoperl_*() に
  * リダイレクトする関数マクロを定義している。この既定実装は「常に本物の
  * システムコールへそのまま委譲するだけ」のパススルーで、plain picoperl
@@ -16,7 +16,7 @@
  * リンク時解決に頼っている。
  *
  * 呼び出し先を`(fopen)(...)`のように余分な括弧で囲っているのは、
- * libc-pico2/stdio.hが同名を関数マクロに置き換えているため、素の
+ * libc/stdio.hが同名を関数マクロに置き換えているため、素の
  * `fopen(...)`と書くと自分自身(picoperl_fopen)を再帰呼び出しして
  * しまうのを防ぐため(関数マクロは「識別子の直後に'('」が展開条件のため、
  * `(fopen)`のように直後が'('でなければ展開されず本物のシンボルを指す)。

@@ -1,7 +1,7 @@
 /*
  * picoperl向けlibcシム: <time.h>
  *
- * time()/localtime()をpicoperl自前の実装(romperl/time/picotime.c)経由の
+ * time()/localtime()をpicoperl自前の実装(libc/picotime.c)経由の
  * picoperl_time()/picoperl_localtime()にリダイレクトする。
  *
  * gmtime()は対象外: pp_sys.cに#includeされるtime64.cの
@@ -15,13 +15,13 @@
  *
  * libc依存を削るのはromperl側だけでよく、plain picoperlはNV=floatの
  * 最小実装のままにする方針のため(TODO.md「Phase 5」参照)、他の
- * libc-pico2シムと同じ「弱いデフォルト実装(project rootの
+ * libcシムと同じ「弱いデフォルト実装(project rootの
  * time_shim.c、本物のlibc関数へのパススルー)+ romperl側の強い実装
  * (リンク時にpp_requireのromperl_find_for_compileと同じ弱い/強い
  * シンボルの仕組みで上書き)」という型を使う。
  */
-#ifndef PICOPERL_LIBC_PICO2_TIME_H
-#define PICOPERL_LIBC_PICO2_TIME_H
+#ifndef PICOPERL_LIBC_TIME_H
+#define PICOPERL_LIBC_TIME_H
 
 #include_next <time.h>
 
@@ -33,4 +33,4 @@ extern struct tm *picoperl_localtime(const time_t *timep);
 #undef  localtime
 #define localtime(timep)  picoperl_localtime((timep))
 
-#endif /* PICOPERL_LIBC_PICO2_TIME_H */
+#endif /* PICOPERL_LIBC_TIME_H */

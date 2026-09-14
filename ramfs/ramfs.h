@@ -4,7 +4,7 @@
  * romfs(romperl/romfs.h)がFlash埋め込みの読み取り専用イメージだったのに
  * 対して、ramfsは実行時にファイルの新規作成・更新・削除ができる、RAM上
  * だけで完結するファイルシステム。将来的にはlibcの fopen 系関数の裏側
- * (PerlIOやlibc-pico2のstdioシム)から呼ばれる想定なので、API は独自の
+ * (PerlIOやlibcのstdioシム)から呼ばれる想定なので、API は独自の
  * open/read/write ではなく fopen/fread/fwrite/fseek/ftell/fclose/remove
  * に対応させた名前と引数構成にしてある。ただしPOSIX/ISO Cとの互換性は
  * 目指さない(値を合わせているのは分かりやすさのためだけで、

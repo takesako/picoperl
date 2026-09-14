@@ -3,7 +3,7 @@ set -eu
 
 V=5.12.5; T=perl-$V.tar.gz; SRC=perl-$V; OUT=picoperl-$V
 URL=https://www.cpan.org/src/5.0/$T; CC=${CC:-cc}; JOBS=${JOBS:-4}
-OPTIMIZE="${OPTIMIZE:--Os -std=gnu89 -DNO_MATHOMS -flto -ffunction-sections -fdata-sections -I../libc-pico2}"
+OPTIMIZE="${OPTIMIZE:--Os -std=gnu89 -DNO_MATHOMS -flto -ffunction-sections -fdata-sections -I../libc}"
 case $(uname -s) in
 Darwin) LDFLAGS="${LDFLAGS:--flto -Wl,-dead_strip}";;
 *) LDFLAGS="${LDFLAGS:--flto -Wl,--gc-sections}";;
@@ -72,14 +72,14 @@ EOF
 # env_shim.o: getenv/putenvをvfs等と同じ弱いデフォルト実装(本物のlibc
 # 関数へのパススルー)にする。plain picoperlはNV=floatの最小実装のまま
 # にする方針のため、libc依存を削るのはromperl側だけでよい
-# (romperl/env.c参照)。posix_shim.o/stdio_shim.oと同じ弱い/強い
+# (romperl/libc/env.c参照)。posix_shim.o/stdio_shim.oと同じ弱い/強い
 # シンボルの仕組み。
 perl -pi -e 's/(uuniversal\$\(_O\) uutf8\$\(_O\) uutil\$\(_O\) uperlapi\$\(_O\) uposix_shim\$\(_O\) ustdio_shim\$\(_O\))/$1 uenv_shim\$(_O)/' Makefile
 cat >> Makefile <<'EOF'
 uenv_shim$(_O): $(HE) env_shim.c
 	$(CC) $(CCFLAGS) -o $@ $(CFLAGS) env_shim.c
 EOF
-# sort_shim.o: qsortを内製の挿入ソート(romperl/sort/sort.c)に繋ぐための
+# sort_shim.o: qsortを内製の挿入ソート(romperl/libc/sort.c)に繋ぐための
 # 弱いデフォルト実装(本物のlibc qsort(3)へのパススルー)。
 # env_shim.o/posix_shim.o/stdio_shim.oと同じ弱い/強いシンボルの仕組み。
 perl -pi -e 's/(uuniversal\$\(_O\) uutf8\$\(_O\) uutil\$\(_O\) uperlapi\$\(_O\) uposix_shim\$\(_O\) ustdio_shim\$\(_O\) uenv_shim\$\(_O\))/$1 usort_shim\$(_O)/' Makefile
@@ -87,7 +87,7 @@ cat >> Makefile <<'EOF'
 usort_shim$(_O): $(HE) sort_shim.c
 	$(CC) $(CCFLAGS) -o $@ $(CFLAGS) sort_shim.c
 EOF
-# rand_shim.o: rand/srandを内製PRNG(romperl/rand/rand.c)に繋ぐための
+# rand_shim.o: rand/srandを内製PRNG(romperl/libc/rand.c)に繋ぐための
 # 弱いデフォルト実装(本物のlibc rand(3)/srand(3)へのパススルー)。
 # env_shim.o/posix_shim.o/stdio_shim.o/sort_shim.oと同じ弱い/強い
 # シンボルの仕組み。
@@ -96,7 +96,7 @@ cat >> Makefile <<'EOF'
 urand_shim$(_O): $(HE) rand_shim.c
 	$(CC) $(CCFLAGS) -o $@ $(CFLAGS) rand_shim.c
 EOF
-# time_shim.o: time/localtimeを内製実装(romperl/time/picotime.c、
+# time_shim.o: time/localtimeを内製実装(romperl/libc/picotime.c、
 # 固定エポック+ゼロから計算するUTCカレンダー変換)に繋ぐための弱い
 # デフォルト実装(本物のlibc time(3)/localtime(3)へのパススルー)。
 # env_shim.o/posix_shim.o/stdio_shim.o/sort_shim.o/rand_shim.oと同じ
@@ -119,7 +119,7 @@ perl -pi -e "s/^nvtype=.*/nvtype='float'/; s/^nvsize=.*/nvsize='4'/" uconfig.sh
 perl -pi -e "s/^i_float=.*/i_float='define'/; s/^d_dbl_dig=.*/d_dbl_dig='define'/" uconfig.sh
 
 # i_syswait='undef' だと <sys/wait.h> がどこからもincludeされず、wait()の宣言が
-# 無い(暗黙のK&R形式)まま本物のwait()が直接呼ばれる。libc-pico2/sys/wait.hで
+# 無い(暗黙のK&R形式)まま本物のwait()が直接呼ばれる。libc/sys/wait.hで
 # wait/waitpidを無効化しても、includeされなければ差し替わらない。有効化して
 # シム経由にする(WCOREDUMP等のマクロが追加で使えるようになるだけで副作用は無い)。
 perl -pi -e "s/^i_syswait=.*/i_syswait='define'/" uconfig.sh
@@ -138,11 +138,11 @@ perl -0777 -pi -e 's/^(#   define Perl_cos cos\n#   define Perl_sin sin\n#   def
 perl -0777 -pi -e 's/(#   define NV_DIG DBL_DIG\n.*?\n)(?=#   if NVSIZE == 4\n)/#   if NVSIZE == 4\n#   define NV_DIG FLT_DIG\n#   ifdef FLT_MANT_DIG\n#       define NV_MANT_DIG FLT_MANT_DIG\n#   endif\n#   ifdef FLT_MIN\n#       define NV_MIN FLT_MIN\n#   endif\n#   ifdef FLT_MAX\n#       define NV_MAX FLT_MAX\n#   endif\n#   ifdef FLT_MIN_10_EXP\n#       define NV_MIN_10_EXP FLT_MIN_10_EXP\n#   endif\n#   ifdef FLT_MAX_10_EXP\n#       define NV_MAX_10_EXP FLT_MAX_10_EXP\n#   endif\n#   ifdef FLT_EPSILON\n#       define NV_EPSILON FLT_EPSILON\n#   endif\n#   ifdef FLT_MAX\n#       define NV_MAX FLT_MAX\n#       define NV_MIN FLT_MIN\n#   else\n#       ifdef HUGE_VALF\n#           define NV_MAX HUGE_VALF\n#       endif\n#   endif\n#   else\n$1#   endif\n/s' perl.h
 
 # perl.hはgetuid/geteuid/getgid/getegidを無条件に素のプロトタイプとして
-# 再宣言している。libc-pico2/unistd.hがこれらを関数マクロに差し替えると、
+# 再宣言している。libc/unistd.hがこれらを関数マクロに差し替えると、
 # マクロはコール式だけでなく宣言文の中の同名トークンも展開してしまうため
 # `Uid_t getuid (void);` が `Uid_t ((uid_t)0);` のような壊れた宣言になる。
 # シムのインクルードガードが有効な間だけこの再宣言をスキップする。
-perl -0777 -pi -e 's/(Uid_t getuid \(void\);\nUid_t geteuid \(void\);\nGid_t getgid \(void\);\nGid_t getegid \(void\);\n)/#ifndef PICOPERL_LIBC_PICO2_UNISTD_H\n$1#endif\n/' perl.h
+perl -0777 -pi -e 's/(Uid_t getuid \(void\);\nUid_t geteuid \(void\);\nGid_t getgid \(void\);\nGid_t getegid \(void\);\n)/#ifndef PICOPERL_LIBC_UNISTD_H\n$1#endif\n/' perl.h
 
 # SVt_NVの空きリストはbody領域にvoid*(8byte)を書き込んで繋ぐ(sv.cのS_more_bodies)。
 # NV=float(4byte)だとポインタサイズ未満になり隣接領域を破壊するため、
