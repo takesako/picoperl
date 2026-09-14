@@ -10,7 +10,10 @@
 /romperl/rootfs/lib/
 /ramfs/ramfs_test
 /vfs/vfs_test
+/vfs/vfs_posix_test
+/vfs/vfs_stdio_test
 /vfs/vfs_test.romfs
 /vfs/vfs_test_romfs_data.c
+/env/env_test
 *.so
 core.*

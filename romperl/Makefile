@@ -8,9 +8,10 @@
 PICOPERL_DIR = ../picoperl-5.12.5
 RAMFS_DIR = ../ramfs
 VFS_DIR = ../vfs
+ENV_DIR = ../env
 CC = cc
 OPTIMIZE = -Os -std=gnu89 -DNO_MATHOMS -flto -ffunction-sections -fdata-sections \
-	-I../libc-pico2 -I$(PICOPERL_DIR) -I$(RAMFS_DIR) -I$(VFS_DIR) -I.
+	-I../libc-pico2 -I$(PICOPERL_DIR) -I$(RAMFS_DIR) -I$(VFS_DIR) -I$(ENV_DIR) -I.
 CFLAGS = -DPERL_CORE -DPERL_MICRO -DSTANDARD_C -DPERL_USE_SAFE_PUTENV $(OPTIMIZE)
 LDFLAGS = -flto -Wl,--gc-sections
 
@@ -35,7 +36,7 @@ romperl: uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o ramfs.o vfs
 	fi
 	$(CC) -o $@ uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o ramfs.o vfs.o vfs_posix.o vfs_stdio.o $(PICOPERL_OBJS) $(LDFLAGS) -lm
 
-uperlmain.o: main.c romfs.h
+uperlmain.o: main.c romfs.h $(ENV_DIR)/env.h
 	$(CC) -c -o $@ $(CFLAGS) main.c
 
 romfs_xs.o: romfs_xs.c romfs.h
@@ -146,6 +147,7 @@ test-stdio: romperl
 test: romperl test-romfs test-inc-require test-zerocopy test-stdio
 	./romperl $(T_DIR)/test-float.pl
 	./romperl $(T_DIR)/test-noproc.pl
+	./romperl $(T_DIR)/test-env.pl
 
 clean:
 	rm -f uperlmain.o romperl romfs.o romfs_data.o romfs_data.c root.romfs romfs_test.o romfs_test romfs_xs.o romfs_compile.o

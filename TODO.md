@@ -17,9 +17,16 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
 - `libc-pico2/` フォルダ(Phase 5)で `fork`/`exec*`/`pipe`/`kill`/`wait*`/`sleep`/
   `get{u,g,eu,eg}id`/`set{u,g}id` を無効化・固定値化。`./picoperl ../t/test-noproc.pl`
   も `ALL TESTS PASSED`
-- 未定義 libc シンボル: 88 個 (`nm -u picoperl`, Phase 1時点は96個)。`floor`/`ceil`/
+- 未定義 libc シンボル: 85 個 (`nm -u picoperl`, Phase 1時点は96個)。`floor`/`ceil`/
   `fmod` の double 版は `time64.c`(Unixエポック秒→暦分解、Perlの NV とは無関係)
   でのみ直接呼ばれており、doubleが本質的に必要と判明・調査済みでクローズ
+- `getenv`/`putenv`をlibcに依存しない自前実装(`env/env.c`、"NAME=VALUE"を
+  丸ごと保持する単方向リスト)に置き換え済み。`nm -u`から両シンボルが
+  消えたことを確認。ROMFS/RAMFSと違いpicoperl/romperl共通の実装
+  (weak/strongの出し分け無し)。`$ENV{x}=y`のスクリプト内往復や
+  `PERL5OPT`の起動時参照は動作するが、シェル側で設定した環境変数が
+  `%ENV`に自動で現れる機能(upstreamが`#ifndef PERL_MICRO`で無効化)は
+  別課題として引き続き残る
 - `ramfs/`(書き込み可能インメモリファイルシステム、fopen系API)と`vfs/`
   (romfs優先・romfsフォールバックのディスパッチ層)を追加。`stat`/`unlink`
   と、fopen系一式(`fopen`/`fclose`/`fread`/`fwrite`/`fseek`/`ftell`/
@@ -787,10 +794,50 @@ romfs(読み取り専用)とramfs(書き込み可能)をPerl/PerlIOから見て1
         `make -C romperl test`の`test-stdio`ターゲット)。`made.txt`等が
         ホストの実ファイルシステムには一切書かれないことも確認。
         plain picoperlは無変更(既存回帰テスト全てパス)
-- [ ] 環境変数の実装: `getenv` `putenv` → freeしないハッシュに格納する
-      (Phase4で判明: picoperlは現状`%ENV`を全く populate しない。
-      `QUERY_STRING="..." ./picoperl -e 'print $ENV{QUERY_STRING}'`が
-      空になることを確認済み。CGI.pmの自動パラメータ取得等に影響する)
+- [x] `getenv`/`putenv`をlibcに依存しない自前実装に置き換えた
+      (`env/env.c`: "NAME=VALUE"文字列をエントリ丸ごと保持する単方向
+      リスト。putenv(3)と同じ契約で、渡された文字列の所有権を受け取り
+      以後freeしない=「freeしないハッシュに格納する」という元の方針通り)
+      - `libc-pico2/stdlib.h`(新規)で`getenv`/`putenv`を
+        `picoperl_getenv`/`picoperl_putenv`にリダイレクト。
+        `setenv`/`unsetenv`は対象外(`d_unsetenv='undef'`でPerl側も
+        呼ばない)
+      - romfs/ramfs/vfsとは違い、read-only/書き込み可能の区別が無い
+        単なるlibc依存の置き換えなので、weak/strongシンボルの出し分けは
+        せず、picoperlとromperl共通で常にこの実装を使う。`env.o`は
+        `picoperl-5.12.5`自身のビルド(`make-picoperl.sh`が`env/env.c`/
+        `env.h`をコピーしMakefileにルール追加)に組み込まれ、romperlは
+        既存の`.o`参照の仕組みでそのまま手に入れる(追加のリンク設定
+        不要)
+      - `main()`の第3引数`envp`を起動時に`env_init(env)`で自前ストアへ
+        複製・取り込みするようにした(`miniperlmain.c`/`romperl/main.c`
+        両方)。これはlibc関数呼び出しではなく、OSがプロセス起動時に
+        用意したデータをそのまま読むだけなので「libcに依存しない」
+        方針とは矛盾しない。無いと`perl.c`自身が`PerlEnv_getenv()`で
+        参照する`PERL5OPT`/`PERL_DESTRUCT_LEVEL`等の起動時環境変数が
+        常に「未設定」になってしまう回帰が起きるため必須だった
+      - 動作確認: `nm -u picoperl`/`nm -u romperl`から`getenv`/`putenv`が
+        消えたことを確認(libc依存を実際に断てたことの直接証拠)。
+        `PERL5OPT="-Z" ./picoperl -e '...'`が`Illegal switch in
+        PERL5OPT: -Z.`で失敗し、無指定なら成功することで、自前
+        getenvが実際にperl.c内部から参照されていることを確認。
+        `$ENV{X}="y"; print $ENV{X}`のスクリプト内往復も確認
+      - `t/env_test.c`(C単体16項目、`make -C env test`)+
+        `t/test-env.pl`(Perl統合3項目、`make-picoperl.sh`末尾と
+        `make -C romperl test`両方で自動実行)
+      - **既知の別課題として残るもの(今回のスコープ外)**: 実行前に
+        シェル側で設定した環境変数(例: `QUERY_STRING=... ./picoperl
+        ...`)は今も`$ENV{QUERY_STRING}`には現れない。原因は
+        `perl.c`の`S_init_postdump_symbols`が`environ`を`%ENV`
+        ハッシュへ一括投入するループを`#ifndef PERL_MICRO`で
+        丸ごとスキップしている(upstream自身の設計、Phase4で発見)ため。
+        `env_init()`は自前のgetenv/putenvストアを埋めるだけで、Perlの
+        `%ENV`ハッシュ自体とは別物(`%ENV`への値の反映は`$ENV{x}=y`の
+        ような明示的なPerl側の代入時のみ、`Perl_magic_setenv`経由で
+        `putenv`が呼ばれて起きる)。CGI.pmの自動パラメータ取得等に
+        引き続き影響する。直すには`perl.c`の該当ループを
+        `PERL_MICRO`でも動くようパッチする必要があり、より踏み込んだ
+        別作業として切り出す
 - [ ] `qsort` → `pp_sort.c` 内製ソートに寄せる
 - [ ] `rand` / `srand` → 内製 PRNG に置き換え
 - [ ] `localtime` / `time` → `time64.c` + 固定エポックの時刻を返す

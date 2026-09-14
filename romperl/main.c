@@ -20,6 +20,7 @@
 #include "perl.h"
 
 #include "romfs.h"
+#include "env.h"
 
 extern const unsigned char romfs_image[];
 extern const unsigned long romfs_image_size;
@@ -38,6 +39,7 @@ main(int argc, char **argv, char **env)
     int i;
 
     PERL_SYS_INIT3(&argc, &argv, &env);
+    env_init(env);
 
     if (!romfs_init(romfs_image, romfs_image_size)) {
         fprintf(stderr, "romperl: embedded ROMFS image is invalid\n");
