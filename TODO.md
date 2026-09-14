@@ -51,6 +51,18 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
   `libc/`直下にフラットに統合(サブフォルダ無し、`libc/Makefile`1つで
   まとめて単体テスト可能)。`nm -u romperl`から該当シンボルが全て消え、
   `nm -u picoperl`には残ることを確認済み
+- `malloc`/`calloc`/`realloc`/`free`(`libc/malloc.c`)も同じ型で置き換え。
+  x86_64では本物のmallocでヒープ領域(4MB)を一括確保し、その中を
+  first-fit+前後合体(coalescing)の単方向チャンクリストで切り出す
+  単純な実装(実機ではこの一括確保部分を静的領域に差し替える想定)。
+  `t/malloc_test.c`(単体20項目)・`t/test-malloc.pl`(Perl統合9項目)
+  とも全通過。実測で判明した重大な点2つ: (1)RP2350のSRAM 520KB全体は
+  `use strict; use warnings; use Carp;`程度でも収まらず、CGI.pmを使う
+  ような処理には2MB以上要る(実機移植はPhase 7で追加検討が必要)、
+  (2)ヒープ枯渇が近い境界(384〜512KB付近)では`Perl_Slab_Alloc`
+  (op.c)がNULLチェック漏れのままSEGVすることがあり、これはこの
+  アロケータではなくPerl 5.12.5 core側の既存の弱点(詳細は
+  `libc/malloc.c`冒頭コメント参照)
 - `romperl/`(Phase 4)完成: `../picoperl-5.12.5`の`.o`を参照するだけで
   picoperl-5.12.5自体には一切手を入れずに、自作ROMFS形式の埋め込み
   (`.romfs`セクション)、`open/read/seek/close/stat`最小API、
@@ -1037,7 +1049,74 @@ libc代替モジュールを、既存の`libc-pico2/`(*.hのシムヘッダを�
         検証。`t/test-time.pl`(Perl統合4項目、`make -C romperl test`)で
         `time()`が固定値0を返すこと、`localtime(0)`が
         `gmtime(0)`と一致すること、うるう日を正しく扱うことを確認
-- [ ] `malloc` / `calloc` / `realloc` / `free` → 固定ヒープアロケータ
+- [x] `malloc`/`calloc`/`realloc`/`free` → 固定ヒープアロケータ
+      (`libc/malloc.c`)に置き換えた(romperlのみ。plain picoperlは
+      今まで通り本物のlibc `malloc(3)`等を使う。これまでと同じ
+      「弱いデフォルト(project rootの`malloc_shim.c`)+ romperl側の
+      強い実装」の型)
+      - 設計(ユーザー指示: 「速度は不要、データ構造・実装のシンプル
+        さを優先。x86_64では全体を本物のmallocで一括確保しその中を
+        切り出す。freeはしっかり」): ヒープ全体を1つの連続領域として
+        確保し(x86_64ホストでは`(malloc)(HEAP_SIZE)`で一括確保。
+        実機(RP2350、Phase 7)ではここを固定サイズの静的配列に差し替え
+        る想定)、中の全チャンク(使用中・空き問わず)を物理アドレス順の
+        単方向リストで繋ぐ(`chunk->next`は「次に確保したチャンク」
+        ではなく「メモリ上で直後のチャンク」)。ヘッダはヒープ自身に
+        埋め込み、別の管理領域は持たない
+      - malloc: 空きチャンクをfirst-fitで探し、十分大きければ分割
+      - free: 前方(`chunk->next`、O(1))・後方(単方向リストなので
+        先頭から線形探索、O(n)。速度不要という方針に基づき双方向
+        リストにする複雑さより単方向+線形探索を選んだ)の両方で
+        隣接する空きチャンクと合体する。前方だけ・後方だけの
+        合体では防げない断片化(例: A・B・Cと並んだ状態でAとCだけ
+        先にfreeした後、最後にBをfreeすると両側と合体できる必要が
+        ある)を、単体テストで実際に検証済み
+      - realloc: 常に新規mallocしてコピーし元をfreeする単純な実装
+        (縮小時は元のポインタをそのまま使い回す)
+      - `t/malloc_test.c`(C単体20項目、`make -C libc test`):
+        基本の確保/解放/再利用、calloc のゼロ初期化、前方/後方
+        両方向の合体、realloc の拡大(内容保持)・縮小(ポインタ
+        使い回し)・`NULL`/`0`引数、ヒープより大きい要求の失敗、
+        `free(NULL)`の安全性を検証。`picoperl_malloc_stats()`/
+        `picoperl_malloc_reset()`というテスト専用フックを追加して
+        ヒープの内部状態を覗けるようにした
+      - **重大な発見1: RP2350のSRAM(520KB)には収まらない**。
+        当初520KB相当を想定していたが実測すると、`use strict; use
+        warnings; use Carp;`だけで384KB前後がぎりぎりで、
+        `use CGI;`を使った本格的な処理には2MB以上必要と判明した。
+        Perl 5.12.5は(NO_MATHOMS/float NV/lib無し等、既存の削減を
+        全て適用しても)RP2350の520KB全部を使ってもほとんどの
+        スクリプトが動かせない、というのが実測に基づく結論。
+        既存テスト一式(CGI.pm使用込み)が安定して通る4MBを暫定値と
+        している。実機で動かすには、Phase 7で埋め込みモジュールを
+        削るか、Perlのメモリ使用量自体をさらに削減するか、外部RAMを
+        使うか、といった追加の検討が要る、と正直に記録しておく
+      - **重大な発見2: ヒープが逼迫する境界付近でSEGVすることがある
+        (このアロケータのバグではない)**。384〜512KB付近で
+        "Out of memory!"の代わりにクラッシュする現象を`gdb`で
+        追跡した結果、Perl 5.12.5自体(`op.c`の`Perl_Slab_Alloc`、
+        構文木ノード専用の確保関数)が`PerlMemShared_calloc()`
+        (=`calloc()`、このアロケータへリダイレクト済み)失敗時に
+        `NULL`を返すだけで、通常の`Perl_safesysmalloc`経路のように
+        "Out of memory!"を出して`my_exit()`する処理を持たないことが
+        原因だった。呼び出し元(`perly.y`自動生成パーサ内の
+        `Perl_newWHILEOP`等)もこの`NULL`を全箇所チェックしておらず、
+        `loop->op_type = ...`のようなNULL経由の書き込みで落ちる
+        (`gdb`で`loop=0x0`のまま該当行に到達したことを確認)。
+        通常の環境ではmalloc/callocが仮想メモリに支えられ実質的に
+        失敗しないため表面化しない、Perl core側の潜在的な弱点。
+        picoperl-5.12.5自体は変更しない方針のため、ヒープに十分な
+        余裕を持たせることで回避している(アロケータを直しても
+        解決しない問題のため)
+      - 動作確認: `nm -u romperl`から`malloc`(自前実装内の一括確保
+        用の1箇所を除く)/`calloc`/`realloc`/`free`が消え、
+        `nm -u picoperl`には本物のlibcシンボルとして残ることを確認。
+        バイナリサイズは本機能追加前と完全一致の909,488byte
+        (plain picoperlは無変更)。`t/test-malloc.pl`
+        (Perl統合9項目、`make-picoperl.sh`末尾と`make -C romperl
+        test`両方で自動実行): 2000個の可変長文字列の生成/破棄、
+        配列の伸縮、ハッシュの追加/削除、20000バイトへの文字列連結
+        の繰り返しを経てもクラッシュ・内容破損が無いことを確認
 - [x] `__ctype_b_loc`(locale依存)を外した(romperlのみ。plain picoperlは
       今まで通り本物のlibc `is*`/`to*`(3)を使う。これまでと同じ
       「弱いデフォルト(project rootの`ctype_shim.c`)+ romperl側の

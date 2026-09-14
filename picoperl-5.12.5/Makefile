@@ -21,7 +21,7 @@ O = uav$(_O) udeb$(_O) udoio$(_O) udoop$(_O) udump$(_O) \
 	uregcomp$(_O) uregexec$(_O) urun$(_O) \
 	uscope$(_O) usv$(_O) utaint$(_O) utoke$(_O) \
 	unumeric$(_O) ulocale$(_O) umathoms$(_O) \
-	uuniversal$(_O) uutf8$(_O) uutil$(_O) uperlapi$(_O) uposix_shim$(_O) ustdio_shim$(_O) uenv_shim$(_O) usort_shim$(_O) urand_shim$(_O) utime_shim$(_O) uctype_shim$(_O)
+	uuniversal$(_O) uutf8$(_O) uutil$(_O) uperlapi$(_O) uposix_shim$(_O) ustdio_shim$(_O) uenv_shim$(_O) usort_shim$(_O) urand_shim$(_O) utime_shim$(_O) uctype_shim$(_O) umalloc_shim$(_O)
 
 picoperl:	$(O)
 	$(LD) -o $@ $(O) $(LDFLAGS) $(LIBS)
@@ -187,3 +187,5 @@ utime_shim$(_O): $(HE) time_shim.c
 	$(CC) $(CCFLAGS) -o $@ $(CFLAGS) time_shim.c
 uctype_shim$(_O): $(HE) ctype_shim.c
 	$(CC) $(CCFLAGS) -o $@ $(CFLAGS) ctype_shim.c
+umalloc_shim$(_O): $(HE) malloc_shim.c
+	$(CC) $(CCFLAGS) -o $@ $(CFLAGS) malloc_shim.c

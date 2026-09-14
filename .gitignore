@@ -19,5 +19,6 @@
 /libc/rand_test
 /libc/time_test
 /libc/ctype_test
+/libc/malloc_test
 *.so
 core.*

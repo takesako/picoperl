@@ -35,6 +35,7 @@ cp -p ../sort_shim.c "../$OUT/"
 cp -p ../rand_shim.c "../$OUT/"
 cp -p ../time_shim.c "../$OUT/"
 cp -p ../ctype_shim.c "../$OUT/"
+cp -p ../malloc_shim.c "../$OUT/"
 cp -p Makefile.micro "../$OUT/Makefile"
 
 cd "../$OUT"
@@ -117,6 +118,14 @@ cat >> Makefile <<'EOF'
 uctype_shim$(_O): $(HE) ctype_shim.c
 	$(CC) $(CCFLAGS) -o $@ $(CFLAGS) ctype_shim.c
 EOF
+# malloc_shim.o: malloc/calloc/realloc/freeを内製の固定ヒープアロケータ
+# (romperl/libc/malloc.c)に繋ぐための弱いデフォルト実装(本物のlibc
+# malloc(3)等へのパススルー)。env_shim.o等と同じ弱い/強いシンボルの仕組み。
+perl -pi -e 's/(uuniversal\$\(_O\) uutf8\$\(_O\) uutil\$\(_O\) uperlapi\$\(_O\) uposix_shim\$\(_O\) ustdio_shim\$\(_O\) uenv_shim\$\(_O\) usort_shim\$\(_O\) urand_shim\$\(_O\) utime_shim\$\(_O\) uctype_shim\$\(_O\))/$1 umalloc_shim\$(_O)/' Makefile
+cat >> Makefile <<'EOF'
+umalloc_shim$(_O): $(HE) malloc_shim.c
+	$(CC) $(CCFLAGS) -o $@ $(CFLAGS) malloc_shim.c
+EOF
 perl -0777 -pi -e 's@(    /\* Unregister our signal handler.*?)(    exitstatus = perl_destruct)@#ifndef PERL_MICRO\n$1#endif\n$2@s' miniperlmain.c
 perl -MConfig -pi -e 's/^((?:short|int|long(?:dbl|long)?|ptr|double|[iun]v|u?quad|[iu]\d+|fpos|lseek)(?:size|type)|byteorder|d_quad|quadkind|use64.+|uidtype|gidtype)=.*/"$1=\x27$Config{$1}\x27"/e; s/^(d_const|i_unistd|i_fcntl)=.*/$1=\x27define\x27/' uconfig.sh
 perl -MConfig -pi -e 's/^(signal_t)=.*/"$1=\x27$Config{$1}\x27"/e;' uconfig.sh
@@ -195,3 +204,4 @@ printf 'binary: '; wc -c < picoperl
 ./picoperl ../t/test-noproc.pl
 ./picoperl ../t/test-env.pl
 ./picoperl ../t/test-ctype.pl
+./picoperl ../t/test-malloc.pl
