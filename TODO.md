@@ -631,9 +631,9 @@ romfs(読み取り専用)とramfs(書き込み可能)をPerl/PerlIOから見て1
 
 ## Phase 5: libc 依存の削減 → libc-pico2/ フォルダで *.h *.c を作成
 
-- [ ] `#include <*.h>` で `../libc-pico2/` フォルダが優先されて読み込まれるように
+- [x] `#include <*.h>` で `../libc-pico2/` フォルダが優先されて読み込まれるように
       → `make-picoperl.sh` の `OPTIMIZE` に `-I../libc-pico2` を追加を確認
-- [ ] プロセス系を無効: `fork` `execl` `execv` `execvp` `wait` `kill` `pipe`
+- [x] プロセス系を無効: `fork` `execl` `execv` `execvp` `wait` `kill` `pipe`
       `sleep` `getpid` `getuid` `geteuid` `getgid` `getegid` `setuid` `setgid`
       (主に `pp_sys.c` / `doio.c`) → `libc-pico2/unistd.h` / `signal.h` /
       `sys/wait.h` で常にエラー(`errno=ENOSYS`)または固定値を返すマクロに
@@ -659,11 +659,27 @@ romfs(読み取り専用)とramfs(書き込み可能)をPerl/PerlIOから見て1
     `#ifndef HAS_KILL` で "The kill function is unimplemented" と die する
     既存の仕組みが先に効いていた(`d_kill='undef'` のため)。signal.h の
     シムは `apply()` を経由しない直接呼び出し経路への保険として残す
-- [ ] `floor`/`ceil`/`fmod`(double版)が `floorf`/`ceilf`/`fmodf` と両方リンク
-      されている(`nm -u` で確認)。`Perl_floor`等のマクロ経由以外にも
-      `pp_pack.c`/`numeric.c`/`time64.c` あたりで直接 `floor()` 等を呼んでいる
-      箇所がある想定。float 版に統一できるか、struct tm 計算など double が
-      本質的に必要な箇所かを切り分ける
+- [x] `floor`/`ceil`/`fmod`(double版)が `floorf`/`ceilf`/`fmodf` と両方リンク
+      されている件を調査(`nm -u picoperl`で両方確認: `floor`/`ceil`は
+      `@GLIBC_2.2.5`、`fmod`は`@GLIBC_2.38`、`floorf`/`ceilf`/`fmodf`も別途
+      リンクされている)
+      - 直接呼び出し箇所を`grep`で特定した結果、`Perl_floor`等のマクロ
+        (NVSIZE==4分岐で`floorf`等を使う、Phase2で対応済み)を経由しない
+        直接呼び出しは**`time64.c`だけ**だった(`pp_pack.c`/`numeric.c`には
+        無かった。TODOの元の想定は不正確だった):
+        `S_gmtime64_r`内で`v_tm_sec`/`v_tm_min`/`v_tm_hour`/`v_tm_wday`を
+        `fmod(time, 60.0)`等で、うるう年サイクル数を`floor`/`ceil`で計算
+      - **float版に統一すべきではないと判断、修正不要でクローズ**:
+        `time64.c`のこれらの計算はPerlのNV(スカラー浮動小数点数)とは
+        無関係の、`Time64_T`(`typedef Int64 Time64_T`、64bit整数)で
+        保持するUnixエポック秒を暦(年月日時分秒)に分解するための
+        C内部の整数演算。現在のエポック秒(約17億)はfloatの仮数部が
+        正確に表現できる整数の上限(2^24=16,777,216)を遥かに超えており、
+        floatにしてしまうと時刻計算そのものが壊れる。doubleの仮数部
+        (2^53)なら余裕で収まるため、ここは意図的にdoubleが必要な箇所
+      - 結論: `floor`/`ceil`/`fmod`のdouble版とfloat版が両方リンクされる
+        状態は正しい仕様であり、Perlスカラーの数値計算(`Perl_floor`等)は
+        既にfloat版を使っている。統一は不要、以後この項目は再検討しない
 - [ ] ファイル系を ROMFS 前提に: `open` `close` `read` `write` `lseek` `stat`
       `fstat` `opendir` `readdir` `closedir` `chdir` `chmod` `rename` `unlink`
       `umask` `dup` `isatty` `tmpfile`
