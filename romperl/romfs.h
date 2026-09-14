@@ -9,17 +9,23 @@
  *   どちらもリトルエンディアンのため、バイトスワップ処理を持たない。
  *   他アーキテクチャに移植する場合はこの前提を見直すこと。
  * - 圧縮なし。ファイルデータはエントリ順に連結されるが、各ファイルの直後に
- *   ';' を1byteだけ挟む(entry.sizeには含めない、通常のread/statからは
- *   見えない隠しパディング)。これは pp_require を直接ROMFSに繋ぐ経路
+ *   ';'+NULの2byteを挟む(entry.sizeには含めない、通常のread/statからは
+ *   見えない隠しパディング)。';'は pp_require を直接ROMFSに繋ぐ経路
  *   (romfs_data_for_compile)が、Perl 5.12.5のlex_start()のゼロコピー
  *   分岐(入力の最後のバイトが';'ならSVをコピーしない)を満たすための
- *   センチネル。
+ *   センチネル。NULはそれとは別の理由で必須: PerlのSV文字列内部実装は
+ *   SvPVX(sv)[SvCUR(sv)](=長さの1つ先)が読める'\0'であることを随所で
+ *   前提にしており、';'だけだと隣のエントリのデータを読み進めて
+ *   クラッシュする(詳細はmkromfs.plのコメント、TODO.mdの
+ *   「実装中に遭遇した重大バグ」参照)。romfs_data_for_compile()が返す
+ *   size(=entry.size+1)はこの前提を変えても';'までしか含めない点は
+ *   変わらない(NULはentry.size+1の"1つ先"に物理的に存在するだけ)。
  * - read-only。書き込み・削除・追記は一切サポートしない。
  *
  * イメージ全体のレイアウト:
  *   [romfs_header]
  *   [romfs_entry] * header.file_count
- *   [ファイルデータ + ';'センチネル1byte] をエントリ順に連結
+ *   [ファイルデータ + ';'+NULセンチネル2byte] をエントリ順に連結
  */
 #ifndef PICOPERL_ROMFS_H
 #define PICOPERL_ROMFS_H
@@ -84,10 +90,11 @@ const void *romfs_data(const char *path, unsigned long *out_size);
 
 /*
  * pp_require を直接ROMFSに繋ぐ経路専用。romfs_data() と同じポインタを
- * 返すが、*out_size にはファイル直後の ';' センチネル1byteを含めた
+ * 返すが、*out_size にはファイル直後の ';' センチネルを含めた
  * entry->size+1 を入れる(Perl 5.12.5 の lex_start() が「入力の最後の
  * バイトが';'ならコピーせずそのSVを使う」という分岐を通るようにするため)。
- * 見つからなければNULLを返す。
+ * 物理的にはさらにその1byte先にNULも置かれているが、返すsizeには含めない
+ * (詳細は本ファイル冒頭のレイアウト説明を参照)。見つからなければNULLを返す。
  */
 const void *romfs_data_for_compile(const char *path, unsigned long *out_size);
 

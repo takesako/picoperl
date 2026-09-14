@@ -564,11 +564,70 @@ romfs(romperl/romfs.h)はFlashに埋め込む読み取り専用イメージで�
       - `ramfs/Makefile`に`test`ターゲットを追加(`make -C ramfs test`)。
         `-Wall -Wextra -Werror`で警告0件を確認
       - 動作確認: 29項目全てパス。まだpicoperl/romperlには未接続
-- [ ] Perl/PerlIOへの接続はまだ行っていない。Phase 5の「ファイル系を
+- [x] romfsとramfsの統合方針を決め、`vfs/`ディスパッチ層として実装
+      (詳細は下記「romfsとramfsを統合するvfsディスパッチ層」参照)
+
+### Phase 5 準備: romfsとramfsを統合するvfsディスパッチ層
+
+romfs(読み取り専用)とramfs(書き込み可能)をPerl/PerlIOから見て1本の
+ファイルアクセスに見せるための方針をユーザーと相談して決定し、
+`vfs/vfs.h` / `vfs/vfs.c` として実装した。romfs.c/ramfs.cの実装自体には
+一切手を入れず、`vfs_fopen`等がどちらを呼ぶか振り分けるだけの薄い層。
+
+検討した2案:
+1. **単純な使い分け(採用)**: 書き込みを伴うopenは常にramfsだけを対象に
+   する(romfsには一切触れない)。読み取り専用openはramfs優先→romfs
+   フォールバック。名前衝突時の挙動(後述のshadow/resurrect)は
+   「未定義/保証しない」と割り切る
+2. OverlayFS方式(whiteout付き): romfs上のファイルをremove/上書きした
+   ように見せるため、削除マーカーやcopy-up処理を実装する案。
+   POSIX的な直感には合うが実装・テストの複雑度が増えるため見送った
+
+- [x] `vfs/vfs.h` / `vfs/vfs.c` を新規作成
+      - API: `vfs_fopen`/`vfs_fread`/`vfs_fwrite`/`vfs_fseek`/`vfs_ftell`/
+        `vfs_feof`/`vfs_fclose`/`vfs_remove`/`vfs_stat`/`vfs_init`
+        (ramfs.hのfopen系命名にそのまま合わせている)
+      - `vfs_fopen`: modeが書き込みを含む(`w`/`a`/どこかに`+`)場合は
+        `ramfs_fopen`のみを呼ぶ。読み取り専用(`r`)の場合は
+        `ramfs_fopen(name,"r")`を先に試し、失敗したら`romfs_open(name)`に
+        フォールバックする
+      - **shadowingは特別な実装をせずに自然に得られる**: 「読み取りは
+        ramfs優先」というルールだけで、romfsと同名のファイルにwriteすれば
+        以後の読み取りはramfs側の内容が見える(copy-up不要)
+      - `vfs_remove`はramfsだけを対象にする(romfs上のファイルは削除
+        できない)。ramfs側にshadowが無い状態でromfs専用ファイルを
+        removeしようとすると失敗する(`-1`)
+      - **既知の割り切り**: shadow(ramfs側の上書きコピー)を`remove`した
+        場合、whiteoutを実装していないため以後の読み取りはromfsの
+        元の内容に「戻る」。この程度の衝突時の挙動は保証しないという
+        方針(romfsに入れているのはビルド時埋め込みの固定モジュールだけ
+        なので実用上は問題にならない想定)
+      - `vfs_init()`はramfsだけをリセットする(romfsイメージの寿命管理は
+        呼び出し側の責務のまま)
+- [x] `t/vfs_test.c` を新規作成し、Cから単体で動作確認
+      - 未知の名前(失敗)、romfsのみ(フォールバックで読める/書き込みは
+        拒否される)、ramfsのみ(新規作成・r+更新)、shadow(romfsと同名を
+        writeすると以後ramfs優先で読める)、shadow削除後の
+        resurrect(romfsの内容に戻る)、shadowされていないromfs専用
+        ファイルのremove失敗、ramfs専用ファイルの通常remove、
+        `vfs_init`がramfsだけをリセットしromfsに影響しないこと、
+        の21項目
+      - `vfs/Makefile`に`test`ターゲットを追加(`make -C vfs test`)。
+        テスト用のromfsイメージは`vfs/testdata/readonly.txt`1つだけを
+        `romperl/mkromfs.pl`(フォーマット共通のため生成ツールも共有)で
+        埋め込んで使う。`-Wall -Wextra`で警告0件を確認
+      - 動作確認: 21項目全てパス。まだpicoperl/romperlには未接続
+- [x] ついでに`romperl/romfs.h`のフォーマット説明コメントが、
+      センチネルを`;`1byteだけと記述したまま(実装済みの`;`+NUL 2byte
+      修正が反映されていなかった)古くなっていたのを修正した
+- [ ] Perl/PerlIOへの実接続はまだ行っていない。Phase 5の「ファイル系を
       ROMFS前提に」「stdioをPerlIO経由でUARTに直結」に着手する際に、
-      書き込み可能な部分(新規作成するファイル、`open(... '>')`等)は
-      このramfsに、読み取り専用の同梱モジュール(lib/*.pm等)はromfsに
-      振り分ける方針を検討する
+      libc-pico2のstdioシムから`vfs_fopen`系を呼ぶようにする想定。
+      `pp_require`の直結zero-copyパス(romfsのみ見る)は変更不要のまま
+      残し、そこでromfsに見つからなかった場合の`@INC`探索フォールバック
+      (通常の`fopen`相当)が将来この`vfs_fopen`経由になれば、実行時に
+      ramfsへ書かれたモジュールも`require`できるようになる副次効果が
+      見込める
 
 ## Phase 5: libc 依存の削減 → libc-pico2/ フォルダで *.h *.c を作成
 
@@ -620,7 +679,7 @@ romfs(romperl/romfs.h)はFlashに埋め込む読み取り専用イメージで�
 - [ ] `localtime` / `time` → `time64.c` + 固定エポックの時刻を返す
 - [ ] `malloc` / `calloc` / `realloc` / `free` → 固定ヒープアロケータ
 - [ ] `__ctype_b_loc` (locale 依存) を外す → `locale.c` の除去とセット
-- [ ] `setjmp` / `longjmp` は Cortex-M33 でも必要。newlib-nano 版で確認
+- [ ] `setjmp` / `longjmp` は Cortex-M33 でも必要。まずは x86_64 で。
 
 ## Phase 6: ARM Linux/Thumb で中間検証
 
@@ -633,14 +692,14 @@ romfs(romperl/romfs.h)はFlashに埋め込む読み取り専用イメージで�
 
 ## Phase 7: arm-none-eabi / Cortex-M33 (RP2350)
 
-- [ ] `arm-none-eabi-gcc -mcpu=cortex-m33 -mthumb` + newlib-nano を参考に実装
+- [ ] `arm-none-eabi-gcc -mcpu=cortex-m33 -mthumb` で動くように実装
 - [ ] リンカスクリプト / スタートアップ / スタックサイズの決定
 - [ ] ヒープサイズと RP2350 の RAM (520KB) に収まるかの見積もり
 - [ ] `setjmp`/`longjmp` と例外処理の動作確認
 
 ## Phase 8: RAMFS + UART のみで動作
 
-- [ ] スクリプトをバイナリに埋め込む RAMFS を実装
+- [ ] バイナリに埋め込まれた ROMFS と RAMFS をマージ実装
 - [ ] PerlIO を UART ドライバに接続 (stdin/stdout/stderr のみ)
 - [ ] QEMU libvirt で起動確認
 

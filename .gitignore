@@ -9,5 +9,8 @@
 /romperl/romfs_test
 /romperl/rootfs/lib/
 /ramfs/ramfs_test
+/vfs/vfs_test
+/vfs/vfs_test.romfs
+/vfs/vfs_test_romfs_data.c
 *.so
 core.*
