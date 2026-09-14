@@ -11,9 +11,10 @@ VFS_DIR = ../vfs
 ENV_DIR = ../env
 SORT_DIR = ../sort
 RAND_DIR = ../rand
+TIME_DIR = ../time
 CC = cc
 OPTIMIZE = -Os -std=gnu89 -DNO_MATHOMS -flto -ffunction-sections -fdata-sections \
-	-I../libc-pico2 -I$(PICOPERL_DIR) -I$(RAMFS_DIR) -I$(VFS_DIR) -I$(ENV_DIR) -I$(SORT_DIR) -I$(RAND_DIR) -I.
+	-I../libc-pico2 -I$(PICOPERL_DIR) -I$(RAMFS_DIR) -I$(VFS_DIR) -I$(ENV_DIR) -I$(SORT_DIR) -I$(RAND_DIR) -I$(TIME_DIR) -I.
 CFLAGS = -DPERL_CORE -DPERL_MICRO -DSTANDARD_C -DPERL_USE_SAFE_PUTENV $(OPTIMIZE)
 LDFLAGS = -flto=auto -Wl,--gc-sections
 
@@ -25,23 +26,24 @@ all: romperl
 # romfs.o/romfs_data.o/ramfs.o/vfs.oはperl.hに依存しないのでOPTIMIZEのみで
 # 足りるが、romfs_xs.oはperl.h/XSUB.hを使うためmain.cと同じCFLAGS
 # (PERL_CORE等)でコンパイルする。異なるdefineでABIがずれるのを防ぐため。
-# vfs_posix.o/vfs_stdio.o/env.o/sort.o/rand.oは、picoperl-5.12.5/
-# posix_shim.o・stdio_shim.o・env_shim.o・sort_shim.o・rand_shim.o
-# (弱いデフォルト、本物のlibc関数へのパススルー)をリンク時に上書きし、
-# stat/unlink(vfs_posix.o)・fopen系(vfs_stdio.o)・getenv/putenv(env.o)・
-# qsort(sort.o)・rand/srand(rand.o)をROMFS/RAMFS/自前実装経由にする
-# (pp_requireのromperl_find_for_compileと同じ弱い/強いシンボルの
-# 仕組み)。open/close/read/write/lseek/fstatは対象外(TODO.md
-# 「Phase 5」参照)。libc依存を削るのはromperl側だけでよく、
-# plain picoperlはNV=floatの最小実装のままにする方針のため、
-# posix_shim.c/stdio_shim.c/env_shim.c/sort_shim.c/rand_shim.cは
-# いずれも弱いデフォルトのまま。
-romperl: uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o ramfs.o vfs.o vfs_posix.o vfs_stdio.o env.o sort.o rand.o
+# vfs_posix.o/vfs_stdio.o/env.o/sort.o/rand.o/time.oは、picoperl-5.12.5/
+# posix_shim.o・stdio_shim.o・env_shim.o・sort_shim.o・rand_shim.o・
+# time_shim.o(弱いデフォルト、本物のlibc関数へのパススルー)をリンク時に
+# 上書きし、stat/unlink(vfs_posix.o)・fopen系(vfs_stdio.o)・
+# getenv/putenv(env.o)・qsort(sort.o)・rand/srand(rand.o)・
+# time/localtime(time.o)をROMFS/RAMFS/自前実装経由にする(pp_requireの
+# romperl_find_for_compileと同じ弱い/強いシンボルの仕組み)。
+# open/close/read/write/lseek/fstatは対象外(TODO.md「Phase 5」参照)。
+# libc依存を削るのはromperl側だけでよく、plain picoperlはNV=floatの
+# 最小実装のままにする方針のため、posix_shim.c/stdio_shim.c/
+# env_shim.c/sort_shim.c/rand_shim.c/time_shim.cはいずれも弱い
+# デフォルトのまま。
+romperl: uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o ramfs.o vfs.o vfs_posix.o vfs_stdio.o env.o sort.o rand.o time.o
 	@if [ -z "$(strip $(PICOPERL_OBJS))" ]; then \
 		echo "error: $(PICOPERL_DIR)/*.o が無い。先に ../make-picoperl.sh を実行すること" >&2; \
 		exit 1; \
 	fi
-	$(CC) -o $@ uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o ramfs.o vfs.o vfs_posix.o vfs_stdio.o env.o sort.o rand.o $(PICOPERL_OBJS) $(LDFLAGS) -lm
+	$(CC) -o $@ uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o ramfs.o vfs.o vfs_posix.o vfs_stdio.o env.o sort.o rand.o time.o $(PICOPERL_OBJS) $(LDFLAGS) -lm
 
 uperlmain.o: main.c romfs.h $(ENV_DIR)/env.h
 	$(CC) -c -o $@ $(CFLAGS) main.c
@@ -140,6 +142,11 @@ sort.o: $(SORT_DIR)/sort.c $(SORT_DIR)/sort.h
 rand.o: $(RAND_DIR)/rand.c $(RAND_DIR)/rand.h
 	$(CC) -c -o $@ $(OPTIMIZE) $(RAND_DIR)/rand.c
 
+# time.o: libcのtime(3)/localtime(3)に依存しない実装(../time/picotime.c)
+# の強い実装。env.o/sort.o/rand.oと同じく独立したモジュール。
+time.o: $(TIME_DIR)/picotime.c $(TIME_DIR)/picotime.h
+	$(CC) -c -o $@ $(OPTIMIZE) $(TIME_DIR)/picotime.c
+
 # romfs.c/romfs_data.cのAPI単体テスト (Perl統合前の動作確認用)。
 # t/romfs_test.c は romfs.h に依存するので -I. でカレントディレクトリ
 # (romperl/)をinclude pathに追加する。
@@ -171,10 +178,11 @@ test: romperl test-romfs test-inc-require test-zerocopy test-stdio
 	./romperl $(T_DIR)/test-float.pl
 	./romperl $(T_DIR)/test-noproc.pl
 	./romperl $(T_DIR)/test-env.pl
+	./romperl $(T_DIR)/test-time.pl
 
 clean:
 	rm -f uperlmain.o romperl romfs.o romfs_data.o romfs_data.c root.romfs romfs_test.o romfs_test romfs_xs.o romfs_compile.o
-	rm -f ramfs.o vfs.o vfs_posix.o vfs_stdio.o env.o sort.o rand.o
+	rm -f ramfs.o vfs.o vfs_posix.o vfs_stdio.o env.o sort.o rand.o time.o
 	rm -f $(ROOTFS_PM)
 	rm -f $(T_DIR)/malloctrace.so
 	rmdir rootfs/lib/Exporter rootfs/lib/warnings rootfs/lib/CGI rootfs/lib 2>/dev/null || true

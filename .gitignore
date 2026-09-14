@@ -17,5 +17,6 @@
 /env/env_test
 /sort/sort_test
 /rand/rand_test
+/time/time_test
 *.so
 core.*

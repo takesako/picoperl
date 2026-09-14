@@ -934,7 +934,52 @@ project root、picoperl-5.12.5にコピーされ本物のlibc関数へパスス�
       - `t/rand_test.c`(C単体4項目、`make -C rand test`): 値の範囲
         ([0,32767])・同じseedでの再現性・違うseedでの非一致・
         単純な非退化性(同じ値を返し続けないこと)を検証
-- [ ] `localtime` / `time` → `time64.c` + 固定エポックの時刻を返す
+- [x] `time`/`localtime` → 内製実装(`time/picotime.c`)に置き換えた
+      (romperlのみ。plain picoperlは今まで通り本物のlibc `time(3)`/
+      `localtime(3)`を使う。これまでと同じ「弱いデフォルト
+      (project rootの`time_shim.c`)+ romperl側の強い実装」の型)
+      - `gmtime`は対象外と判明した: `pp_sys.c`が`#include "time64.c"`で
+        直接取り込んでいるPerl本体のtime64(Unix epoch秒⇔暦変換)実装
+        (`S_gmtime64_r`)は、既にlibcに依存しない純粋なCの計算式
+        (floor/ceil/fmod経由、Phase 5で調査済みの箇所)であり、
+        `nm -u`でも`gmtime`はそもそもリンクされていなかった
+        (`SHOULD_USE_SYSTEM_GMTIME`がこのビルドでは常に偽になり、
+        実際に本物の`gmtime()`を呼ぶ分岐が最適化で消えるため)
+      - 一方`time64.c`の`S_localtime64_r`(Perlの`localtime`組み込み
+        関数の実体)は、`S_gmtime64_r`で計算したUTC値を「safe year」に
+        マップした上で、最終段で必ず本物の`localtime()`を呼んで
+        タイムゾーン変換している(pre-1970/post-2037等の範囲外の年でも
+        システムのタイムゾーンデータベースを再利用するための工夫)。
+        RP2350にはタイムゾーンデータベースが無いため、ローカルタイム
+        =UTC(オフセット0)として扱うのが妥当と判断し、
+        `picoperl_localtime()`はUTC相当のカレンダー変換をゼロから
+        計算する設計にした
+      - アルゴリズムはHoward Hinnantのproleptic Gregorian暦アルゴリズム
+        (civil_from_days、正しさが広く検証された定数時間アルゴリズム)。
+        time64.c自体の(より複雑な、safe-year拡張やGregorianサイクル
+        最適化を持つ)実装を再利用する手段が無かった(`S_gmtime64_r`等は
+        `static`でtime64.c/pp_sys.c外から呼べない)ため、独立して
+        書き直した
+      - `time()`は実RTCが無いため常に固定値(`0`、Unixエポック)を返す
+      - **ハマった点**: モジュールのヘッダファイルを素直に`time.h`と
+        命名したところ、romperlのビルド(`-I../time`を含む)で
+        `#include <time.h>`(本物のシステムヘッダのつもり)が
+        このファイル自身を再帰的にincludeしてしまい
+        (`error: unknown type name 'time_t'`等で発覚)、ビルドが
+        壊れた。ファイル名を`picotime.h`/`picotime.c`に変更して回避した
+        (libc-pico2内のシムは`#include_next`で回避しているが、
+        こちらは単なる`-I`ディレクトリなのでその仕組みが使えないため)
+      - 動作確認: `nm -u romperl`から`time`/`localtime`が消え、
+        `nm -u picoperl`には本物のlibcシンボルとして残ることを確認
+        (バイナリサイズも本機能追加前と完全一致の909,072byte)。
+        `t/time_test.c`(C単体13項目、`make -C time test`)で
+        `picoperl_localtime()`を本物の`gmtime(3)`と突き合わせ、
+        エポック境界・うるう年(2000年=100の倍数だが400の倍数なので
+        うるう年、2024年=通常のうるう年)・2038年問題境界・1970年より前
+        (負のtime_t)・1900年、を含む11パターンで完全一致することを
+        検証。`t/test-time.pl`(Perl統合4項目、`make -C romperl test`)で
+        `time()`が固定値0を返すこと、`localtime(0)`が
+        `gmtime(0)`と一致すること、うるう日を正しく扱うことを確認
 - [ ] `malloc` / `calloc` / `realloc` / `free` → 固定ヒープアロケータ
 - [ ] `__ctype_b_loc` (locale 依存) を外す → `locale.c` の除去とセット
 - [ ] `setjmp` / `longjmp` は Cortex-M33 でも必要。まずは x86_64 で。
