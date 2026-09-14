@@ -30,7 +30,7 @@ EOF
 cp -p ../generate_uudmap.pl "../$OUT/"
 cp -p ../posix_shim.c "../$OUT/"
 cp -p ../stdio_shim.c "../$OUT/"
-cp -p ../env/env.c ../env/env.h "../$OUT/"
+cp -p ../env_shim.c "../$OUT/"
 cp -p Makefile.micro "../$OUT/Makefile"
 
 cd "../$OUT"
@@ -66,23 +66,17 @@ cat >> Makefile <<'EOF'
 ustdio_shim$(_O): $(HE) stdio_shim.c
 	$(CC) $(CCFLAGS) -o $@ $(CFLAGS) stdio_shim.c
 EOF
-# env.o: libcのgetenv/putenvに依存しない環境変数ストア(../env/env.c)。
-# posix_shim.o/stdio_shim.oと違い弱い/強いシンボルの出し分けは無い
-# (ROMFS/RAMFSのような読み取り専用/書き込み可能の区別を持たない、単なる
-# libc依存の置き換えのため、picoperl/romperl共通でこの実装をそのまま使う。
-# romperlはpicoperl-5.12.5の.oを参照するだけでenv.oも自動的に手に入る)。
-perl -pi -e 's/(uuniversal\$\(_O\) uutf8\$\(_O\) uutil\$\(_O\) uperlapi\$\(_O\) uposix_shim\$\(_O\) ustdio_shim\$\(_O\))/$1 uenv\$(_O)/' Makefile
+# env_shim.o: getenv/putenvをvfs等と同じ弱いデフォルト実装(本物のlibc
+# 関数へのパススルー)にする。plain picoperlはNV=floatの最小実装のまま
+# にする方針のため、libc依存を削るのはromperl側だけでよい
+# (romperl/env.c参照)。posix_shim.o/stdio_shim.oと同じ弱い/強い
+# シンボルの仕組み。
+perl -pi -e 's/(uuniversal\$\(_O\) uutf8\$\(_O\) uutil\$\(_O\) uperlapi\$\(_O\) uposix_shim\$\(_O\) ustdio_shim\$\(_O\))/$1 uenv_shim\$(_O)/' Makefile
 cat >> Makefile <<'EOF'
-uenv$(_O): $(HE) env.c env.h
-	$(CC) $(CCFLAGS) -o $@ $(CFLAGS) env.c
+uenv_shim$(_O): $(HE) env_shim.c
+	$(CC) $(CCFLAGS) -o $@ $(CFLAGS) env_shim.c
 EOF
 perl -0777 -pi -e 's@(    /\* Unregister our signal handler.*?)(    exitstatus = perl_destruct)@#ifndef PERL_MICRO\n$1#endif\n$2@s' miniperlmain.c
-# env_init(env): main()の第3引数(envp)をpicoperl自前の環境変数ストアに
-# 取り込む。perl.c自身がPerlEnv_getenv()経由でPERL_DESTRUCT_LEVEL等の
-# 起動時環境変数を参照するため、これが無いとgetenv()をpicoperl_getenv()に
-# リダイレクトした際にそれらが常に「未設定」になってしまう。
-perl -pi -e 's/(\s+)\(void\)env;/$1(void)env;\n$1env_init(env);/' miniperlmain.c
-perl -pi -e 's/(#include "perl\.h")/$1\n#include "env.h"/' miniperlmain.c
 perl -MConfig -pi -e 's/^((?:short|int|long(?:dbl|long)?|ptr|double|[iun]v|u?quad|[iu]\d+|fpos|lseek)(?:size|type)|byteorder|d_quad|quadkind|use64.+|uidtype|gidtype)=.*/"$1=\x27$Config{$1}\x27"/e; s/^(d_const|i_unistd|i_fcntl)=.*/$1=\x27define\x27/' uconfig.sh
 perl -MConfig -pi -e 's/^(signal_t)=.*/"$1=\x27$Config{$1}\x27"/e;' uconfig.sh
 # perl -MConfig -pi -e 's/^(\w+)=.*/exists $Config{$1} ? $1."=\x27".(defined $Config{$1}?$Config{$1}:"undef")."\x27" : $&/e' uconfig.sh

@@ -13,7 +13,7 @@ CC = cc
 OPTIMIZE = -Os -std=gnu89 -DNO_MATHOMS -flto -ffunction-sections -fdata-sections \
 	-I../libc-pico2 -I$(PICOPERL_DIR) -I$(RAMFS_DIR) -I$(VFS_DIR) -I$(ENV_DIR) -I.
 CFLAGS = -DPERL_CORE -DPERL_MICRO -DSTANDARD_C -DPERL_USE_SAFE_PUTENV $(OPTIMIZE)
-LDFLAGS = -flto -Wl,--gc-sections
+LDFLAGS = -flto=auto -Wl,--gc-sections
 
 # picoperl本体の.o一式から、main()を含むuperlmain.oだけ除外して使う。
 PICOPERL_OBJS = $(filter-out %/uperlmain.o,$(wildcard $(PICOPERL_DIR)/*.o))
@@ -23,18 +23,21 @@ all: romperl
 # romfs.o/romfs_data.o/ramfs.o/vfs.oはperl.hに依存しないのでOPTIMIZEのみで
 # 足りるが、romfs_xs.oはperl.h/XSUB.hを使うためmain.cと同じCFLAGS
 # (PERL_CORE等)でコンパイルする。異なるdefineでABIがずれるのを防ぐため。
-# vfs_posix.o/vfs_stdio.oは、picoperl-5.12.5/posix_shim.o・stdio_shim.o
-# (弱いデフォルト、本物のシステムコールへのパススルー)をリンク時に
-# 上書きし、stat/unlink(vfs_posix.o)とfopen系(vfs_stdio.o)をROMFS/RAMFS
-# 経由にする(pp_requireのromperl_find_for_compileと同じ弱い/強い
-# シンボルの仕組み)。open/close/read/write/lseek/fstatは対象外
-# (TODO.md「Phase 5」参照)。
-romperl: uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o ramfs.o vfs.o vfs_posix.o vfs_stdio.o
+# vfs_posix.o/vfs_stdio.o/env.oは、picoperl-5.12.5/posix_shim.o・
+# stdio_shim.o・env_shim.o(弱いデフォルト、本物のlibc関数へのパス
+# スルー)をリンク時に上書きし、stat/unlink(vfs_posix.o)・fopen系
+# (vfs_stdio.o)・getenv/putenv(env.o)をROMFS/RAMFS/自前実装経由にする
+# (pp_requireのromperl_find_for_compileと同じ弱い/強いシンボルの
+# 仕組み)。open/close/read/write/lseek/fstatは対象外(TODO.md
+# 「Phase 5」参照)。libc依存を削るのはromperl側だけでよく、
+# plain picoperlはNV=floatの最小実装のままにする方針のため、
+# posix_shim.c/stdio_shim.c/env_shim.cはいずれも弱いデフォルトのまま。
+romperl: uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o ramfs.o vfs.o vfs_posix.o vfs_stdio.o env.o
 	@if [ -z "$(strip $(PICOPERL_OBJS))" ]; then \
 		echo "error: $(PICOPERL_DIR)/*.o が無い。先に ../make-picoperl.sh を実行すること" >&2; \
 		exit 1; \
 	fi
-	$(CC) -o $@ uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o ramfs.o vfs.o vfs_posix.o vfs_stdio.o $(PICOPERL_OBJS) $(LDFLAGS) -lm
+	$(CC) -o $@ uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o ramfs.o vfs.o vfs_posix.o vfs_stdio.o env.o $(PICOPERL_OBJS) $(LDFLAGS) -lm
 
 uperlmain.o: main.c romfs.h $(ENV_DIR)/env.h
 	$(CC) -c -o $@ $(CFLAGS) main.c
@@ -117,6 +120,12 @@ vfs_posix.o: $(VFS_DIR)/vfs_posix.c $(VFS_DIR)/vfs_posix.h $(VFS_DIR)/vfs.h
 vfs_stdio.o: $(VFS_DIR)/vfs_stdio.c $(VFS_DIR)/vfs_stdio.h $(VFS_DIR)/vfs.h
 	$(CC) -c -o $@ $(OPTIMIZE) $(VFS_DIR)/vfs_stdio.c
 
+# env.o: libcのgetenv/putenvに依存しない環境変数ストア(../env/env.c)の
+# 強い実装。romfs/ramfs/vfsとは無関係の独立したモジュールだが、同じ
+# 弱い/強いシンボルの仕組みでpicoperl-5.12.5/env_shim.oを上書きする。
+env.o: $(ENV_DIR)/env.c $(ENV_DIR)/env.h
+	$(CC) -c -o $@ $(OPTIMIZE) $(ENV_DIR)/env.c
+
 # romfs.c/romfs_data.cのAPI単体テスト (Perl統合前の動作確認用)。
 # t/romfs_test.c は romfs.h に依存するので -I. でカレントディレクトリ
 # (romperl/)をinclude pathに追加する。
@@ -151,7 +160,7 @@ test: romperl test-romfs test-inc-require test-zerocopy test-stdio
 
 clean:
 	rm -f uperlmain.o romperl romfs.o romfs_data.o romfs_data.c root.romfs romfs_test.o romfs_test romfs_xs.o romfs_compile.o
-	rm -f ramfs.o vfs.o vfs_posix.o vfs_stdio.o
+	rm -f ramfs.o vfs.o vfs_posix.o vfs_stdio.o env.o
 	rm -f $(ROOTFS_PM)
 	rm -f $(T_DIR)/malloctrace.so
 	rmdir rootfs/lib/Exporter rootfs/lib/warnings rootfs/lib/CGI rootfs/lib 2>/dev/null || true

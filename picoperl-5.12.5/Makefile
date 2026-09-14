@@ -21,7 +21,7 @@ O = uav$(_O) udeb$(_O) udoio$(_O) udoop$(_O) udump$(_O) \
 	uregcomp$(_O) uregexec$(_O) urun$(_O) \
 	uscope$(_O) usv$(_O) utaint$(_O) utoke$(_O) \
 	unumeric$(_O) ulocale$(_O) umathoms$(_O) \
-	uuniversal$(_O) uutf8$(_O) uutil$(_O) uperlapi$(_O) uposix_shim$(_O) ustdio_shim$(_O) uenv$(_O)
+	uuniversal$(_O) uutf8$(_O) uutil$(_O) uperlapi$(_O) uposix_shim$(_O) ustdio_shim$(_O) uenv_shim$(_O)
 
 picoperl:	$(O)
 	$(LD) -o $@ $(O) $(LDFLAGS) $(LIBS)
@@ -177,5 +177,5 @@ uposix_shim$(_O): $(HE) posix_shim.c
 	$(CC) $(CCFLAGS) -o $@ $(CFLAGS) posix_shim.c
 ustdio_shim$(_O): $(HE) stdio_shim.c
 	$(CC) $(CCFLAGS) -o $@ $(CFLAGS) stdio_shim.c
-uenv$(_O): $(HE) env.c env.h
-	$(CC) $(CCFLAGS) -o $@ $(CFLAGS) env.c
+uenv_shim$(_O): $(HE) env_shim.c
+	$(CC) $(CCFLAGS) -o $@ $(CFLAGS) env_shim.c

@@ -21,12 +21,16 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
   `fmod` の double 版は `time64.c`(Unixエポック秒→暦分解、Perlの NV とは無関係)
   でのみ直接呼ばれており、doubleが本質的に必要と判明・調査済みでクローズ
 - `getenv`/`putenv`をlibcに依存しない自前実装(`env/env.c`、"NAME=VALUE"を
-  丸ごと保持する単方向リスト)に置き換え済み。`nm -u`から両シンボルが
-  消えたことを確認。ROMFS/RAMFSと違いpicoperl/romperl共通の実装
-  (weak/strongの出し分け無し)。`$ENV{x}=y`のスクリプト内往復や
-  `PERL5OPT`の起動時参照は動作するが、シェル側で設定した環境変数が
-  `%ENV`に自動で現れる機能(upstreamが`#ifndef PERL_MICRO`で無効化)は
-  別課題として引き続き残る
+  丸ごと保持する単方向リスト)に置き換え済み。**romperl限定**(plain
+  picoperlは今まで通り本物のlibc getenv/putenvを使う。`stat`/`unlink`/
+  fopen系と同じ「弱いデフォルト+romperl側の強い実装」の型に統一。
+  libc依存を削るのはromperl側だけでよく、plain picoperlはNV=floatの
+  最小実装のままにする、という方針を明確化した)。`nm -u romperl`から
+  両シンボルが消え、`nm -u picoperl`には本物のlibcシンボルとして残る
+  ことを確認。`$ENV{x}=y`のスクリプト内往復や`PERL5OPT`の起動時参照は
+  両方で動作するが、シェル側で設定した環境変数が`%ENV`に自動で現れる
+  機能(upstreamが`#ifndef PERL_MICRO`で無効化)は別課題として引き続き
+  残る
 - `ramfs/`(書き込み可能インメモリファイルシステム、fopen系API)と`vfs/`
   (romfs優先・romfsフォールバックのディスパッチ層)を追加。`stat`/`unlink`
   と、fopen系一式(`fopen`/`fclose`/`fread`/`fwrite`/`fseek`/`ftell`/
@@ -649,6 +653,19 @@ romfs(読み取り専用)とramfs(書き込み可能)をPerl/PerlIOから見て1
 
 ## Phase 5: libc 依存の削減 → libc-pico2/ フォルダで *.h *.c を作成
 
+**方針の確認(env周りの実装ミスから学んだ教訓)**: libc依存を削る対象は
+基本的に **romperl側だけでよい**。plain picoperlはNV=floatにする最小
+実装のままで十分(`miniperlmain.c`はromperlからは一切参照されない
+=romperlの`romperl/Makefile`は`uperlmain.o`を明示的に`filter-out`して
+おり、`main()`は常にromperl自身の`romperl/main.c`が提供する)。
+`stat`/`unlink`/fopen系で確立した「弱いデフォルト実装(`*_shim.c`、
+project root、picoperl-5.12.5にコピーされ本物のlibc関数へパススルー)
++ romperl側の強い実装(リンク時にpp_requireのromperl_find_for_compileと
+同じ弱い/強いシンボルの仕組みで上書き)」という型を、今後のPhase5
+項目(qsort/rand・srand/localtime・time/malloc系/locale/setjmp等)にも
+一貫して適用する。plain picoperl自身の`.c`(`miniperlmain.c`等)を
+直接編集・拡張する必要は無いはず、という前提で見直しながら進める。
+
 - [x] `#include <*.h>` で `../libc-pico2/` フォルダが優先されて読み込まれるように
       → `make-picoperl.sh` の `OPTIMIZE` に `-I../libc-pico2` を追加を確認
 - [x] プロセス系を無効: `fork` `execl` `execv` `execvp` `wait` `kill` `pipe`
@@ -794,37 +811,52 @@ romfs(読み取り専用)とramfs(書き込み可能)をPerl/PerlIOから見て1
         `make -C romperl test`の`test-stdio`ターゲット)。`made.txt`等が
         ホストの実ファイルシステムには一切書かれないことも確認。
         plain picoperlは無変更(既存回帰テスト全てパス)
-- [x] `getenv`/`putenv`をlibcに依存しない自前実装に置き換えた
+- [x] `getenv`/`putenv`をlibcに依存しない自前実装に置き換えた(romperlのみ。
+      plain picoperlは今まで通り本物のlibc `getenv`/`putenv`を使う)
       (`env/env.c`: "NAME=VALUE"文字列をエントリ丸ごと保持する単方向
       リスト。putenv(3)と同じ契約で、渡された文字列の所有権を受け取り
       以後freeしない=「freeしないハッシュに格納する」という元の方針通り)
+      - **当初picoperl/romperl共通の実装にしてしまい、ユーザー指摘で
+        romperl限定に修正した**: 「libc依存をなくすのはromperlだけで
+        よい。picoperlは浮動小数点をfloatにする実装だけでもよい」という
+        方針が明確になったため、`stat`/`unlink`/fopen系と同じ
+        「弱いデフォルト(project rootの`env_shim.c`、本物の
+        `getenv`/`putenv`へのパススルー)+ romperl側の強い実装
+        (`env/env.c`、リンク時に上書き)」という型に作り直した。
+        `env_shim.c`は`picoperl-5.12.5`自身のビルドに組み込まれ
+        (`make-picoperl.sh`がコピー+Makefileルール追加)、
+        `env/env.c`は`romperl/Makefile`が直接コンパイルしてリンクする
+        (`vfs_posix.o`/`vfs_stdio.o`と同じ扱い)
       - `libc-pico2/stdlib.h`(新規)で`getenv`/`putenv`を
         `picoperl_getenv`/`picoperl_putenv`にリダイレクト。
         `setenv`/`unsetenv`は対象外(`d_unsetenv='undef'`でPerl側も
         呼ばない)
-      - romfs/ramfs/vfsとは違い、read-only/書き込み可能の区別が無い
-        単なるlibc依存の置き換えなので、weak/strongシンボルの出し分けは
-        せず、picoperlとromperl共通で常にこの実装を使う。`env.o`は
-        `picoperl-5.12.5`自身のビルド(`make-picoperl.sh`が`env/env.c`/
-        `env.h`をコピーしMakefileにルール追加)に組み込まれ、romperlは
-        既存の`.o`参照の仕組みでそのまま手に入れる(追加のリンク設定
-        不要)
       - `main()`の第3引数`envp`を起動時に`env_init(env)`で自前ストアへ
-        複製・取り込みするようにした(`miniperlmain.c`/`romperl/main.c`
-        両方)。これはlibc関数呼び出しではなく、OSがプロセス起動時に
-        用意したデータをそのまま読むだけなので「libcに依存しない」
-        方針とは矛盾しない。無いと`perl.c`自身が`PerlEnv_getenv()`で
-        参照する`PERL5OPT`/`PERL_DESTRUCT_LEVEL`等の起動時環境変数が
-        常に「未設定」になってしまう回帰が起きるため必須だった
-      - 動作確認: `nm -u picoperl`/`nm -u romperl`から`getenv`/`putenv`が
-        消えたことを確認(libc依存を実際に断てたことの直接証拠)。
-        `PERL5OPT="-Z" ./picoperl -e '...'`が`Illegal switch in
-        PERL5OPT: -Z.`で失敗し、無指定なら成功することで、自前
-        getenvが実際にperl.c内部から参照されていることを確認。
-        `$ENV{X}="y"; print $ENV{X}`のスクリプト内往復も確認
-      - `t/env_test.c`(C単体16項目、`make -C env test`)+
-        `t/test-env.pl`(Perl統合3項目、`make-picoperl.sh`末尾と
-        `make -C romperl test`両方で自動実行)
+        複製・取り込みする処理は`romperl/main.c`だけに追加した
+        (`miniperlmain.c`はromperlからは一切参照されない=
+        `romperl/Makefile`が`uperlmain.o`を明示的に除外しているため、
+        plain picoperl側を編集する必要は無かった)。これはlibc関数
+        呼び出しではなく、OSがプロセス起動時に用意したデータをそのまま
+        読むだけなので「libcに依存しない」方針とは矛盾しない。無いと
+        `perl.c`自身が`PerlEnv_getenv()`で参照する`PERL5OPT`/
+        `PERL_DESTRUCT_LEVEL`等の起動時環境変数が常に「未設定」に
+        なってしまう回帰が起きるため必須だった
+      - 動作確認: `nm -u romperl`から`getenv`/`putenv`が消え、
+        `nm -u picoperl`には引き続き本物のlibcシンボルとして残っている
+        ことを確認(plain picoperlが無変更である直接証拠。バイナリ
+        サイズも本機能追加前と完全一致の909,072byte)。
+        `PERL5OPT="-Z" ./romperl -e '...'`が`Illegal switch in
+        PERL5OPT: -Z.`で失敗し、無指定なら成功することで、romperlの
+        自前getenvが実際にperl.c内部から参照されていることを確認
+        (picoperl側でも同じ挙動になることを、本物のlibc経由で別途確認)。
+        `$ENV{X}="y"; print $ENV{X}`のスクリプト内往復も両方で確認
+      - `t/env_test.c`(C単体16項目、`make -C env test`。env.c自体は
+        picoperl/romperlどちらにも依存しない独立モジュールなので単体
+        テストは引き続き有効)+ `t/test-env.pl`(Perl統合3項目、
+        `make-picoperl.sh`末尾と`make -C romperl test`両方で自動実行。
+        picoperl側はlibcのgetenv/putenv経由、romperl側は自前ストア経由
+        になるが、`%ENV`の読み書き自体はどちらも同じPerlレベルの挙動
+        になるためテスト内容の変更は不要だった)
       - **既知の別課題として残るもの(今回のスコープ外)**: 実行前に
         シェル側で設定した環境変数(例: `QUERY_STRING=... ./picoperl
         ...`)は今も`$ENV{QUERY_STRING}`には現れない。原因は

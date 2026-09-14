@@ -38,7 +38,6 @@
 #include "EXTERN.h"
 #define PERL_IN_MINIPERLMAIN_C
 #include "perl.h"
-#include "env.h"
 
 static void xs_init (pTHX);
 static PerlInterpreter *my_perl;
@@ -76,7 +75,6 @@ main(int argc, char **argv, char **env)
 #  endif
 #endif /* PERL_GLOBAL_STRUCT */
     (void)env;
-    env_init(env);
 #ifndef PERL_USE_SAFE_PUTENV
     PL_use_safe_putenv = 0;
 #endif /* PERL_USE_SAFE_PUTENV */
