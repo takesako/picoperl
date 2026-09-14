@@ -21,7 +21,7 @@ O = uav$(_O) udeb$(_O) udoio$(_O) udoop$(_O) udump$(_O) \
 	uregcomp$(_O) uregexec$(_O) urun$(_O) \
 	uscope$(_O) usv$(_O) utaint$(_O) utoke$(_O) \
 	unumeric$(_O) ulocale$(_O) umathoms$(_O) \
-	uuniversal$(_O) uutf8$(_O) uutil$(_O) uperlapi$(_O)
+	uuniversal$(_O) uutf8$(_O) uutil$(_O) uperlapi$(_O) uposix_shim$(_O)
 
 picoperl:	$(O)
 	$(LD) -o $@ $(O) $(LDFLAGS) $(LIBS)
@@ -173,3 +173,5 @@ uperlapi$(_O):	$(HE) perlapi.c perlapi.h
 
 uudmap.h bitcount.h: generate_uudmap.pl
 	$(PERL) generate_uudmap.pl uudmap.h bitcount.h
+uposix_shim$(_O): $(HE) posix_shim.c
+	$(CC) $(CCFLAGS) -o $@ $(CFLAGS) posix_shim.c

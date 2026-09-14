@@ -55,4 +55,26 @@
 #undef  setgid
 #define setgid(g)       (errno = ENOSYS, -1)
 
+/*
+ * unlink はパス名だけを扱い、fd/FILE*を経由しないため単独でvfs(romfs+
+ * ramfs)経由のpicoperl_unlink()にリダイレクトできる。
+ * plain picoperlではposix_shim.cの弱いデフォルト実装(本物のシステム
+ * コールへのパススルー)が使われ、romperlではvfs/vfs_posix.cの強い実装
+ * (ROMFS/RAMFS経由)がリンク時に上書きする。
+ *
+ * open/close/read/write/lseekは意図的にリダイレクトしていない。
+ * このビルド(useperlio=undef)では sysopen 等が
+ * `PerlLIO_open3()`(=open)で得たfdを直後に`PerlSIO_fdopen()`(本物の
+ * fdopen)へ渡してFILE*化するため、open()だけをvfs用の偽fdにリダイレクト
+ * すると本物のfdopen()がEBADFで失敗する("Bad file descriptor")。
+ * fdopen/fopen以降のstdio全体(fread/fwrite/fclose/fseek等)を合わせて
+ * vfs対応させない限りopen側だけを差し替えても動かないため、TODOの
+ * 「stdioをPerlIO経由でUARTに直結」と合わせて後で一括対応する
+ * (詳細はTODO.md「Phase 5」参照)。
+ */
+extern int  picoperl_unlink(const char *path);
+
+#undef  unlink
+#define unlink(path)            picoperl_unlink((path))
+
 #endif /* PICOPERL_LIBC_PICO2_UNISTD_H */

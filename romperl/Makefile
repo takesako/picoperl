@@ -6,9 +6,11 @@
 # romperl をビルドし直す前に ../make-picoperl.sh を再実行すること)。
 
 PICOPERL_DIR = ../picoperl-5.12.5
+RAMFS_DIR = ../ramfs
+VFS_DIR = ../vfs
 CC = cc
 OPTIMIZE = -Os -std=gnu89 -DNO_MATHOMS -flto -ffunction-sections -fdata-sections \
-	-I../libc-pico2 -I$(PICOPERL_DIR)
+	-I../libc-pico2 -I$(PICOPERL_DIR) -I$(RAMFS_DIR) -I$(VFS_DIR) -I.
 CFLAGS = -DPERL_CORE -DPERL_MICRO -DSTANDARD_C -DPERL_USE_SAFE_PUTENV $(OPTIMIZE)
 LDFLAGS = -flto -Wl,--gc-sections
 
@@ -17,15 +19,19 @@ PICOPERL_OBJS = $(filter-out %/uperlmain.o,$(wildcard $(PICOPERL_DIR)/*.o))
 
 all: romperl
 
-# romfs.o/romfs_data.oはromfs.h以外picoperlのヘッダに依存しないのでOPTIMIZEのみ
-# で足りるが、romfs_xs.oはperl.h/XSUB.hを使うためmain.cと同じCFLAGS
+# romfs.o/romfs_data.o/ramfs.o/vfs.oはperl.hに依存しないのでOPTIMIZEのみで
+# 足りるが、romfs_xs.oはperl.h/XSUB.hを使うためmain.cと同じCFLAGS
 # (PERL_CORE等)でコンパイルする。異なるdefineでABIがずれるのを防ぐため。
-romperl: uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o
+# vfs_posix.oは、picoperl-5.12.5/posix_shim.o(弱いデフォルト、本物の
+# システムコールへのパススルー)をリンク時に上書きしてopen/close/read/
+# write/lseek/stat/fstat/unlinkをROMFS/RAMFS経由にする(pp_requireの
+# romperl_find_for_compileと同じ弱い/強いシンボルの仕組み)。
+romperl: uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o ramfs.o vfs.o vfs_posix.o
 	@if [ -z "$(strip $(PICOPERL_OBJS))" ]; then \
 		echo "error: $(PICOPERL_DIR)/*.o が無い。先に ../make-picoperl.sh を実行すること" >&2; \
 		exit 1; \
 	fi
-	$(CC) -o $@ uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o $(PICOPERL_OBJS) $(LDFLAGS) -lm
+	$(CC) -o $@ uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o ramfs.o vfs.o vfs_posix.o $(PICOPERL_OBJS) $(LDFLAGS) -lm
 
 uperlmain.o: main.c romfs.h
 	$(CC) -c -o $@ $(CFLAGS) main.c
@@ -96,6 +102,15 @@ romfs_data.o: romfs_data.c
 romfs.o: romfs.c romfs.h
 	$(CC) -c -o $@ $(OPTIMIZE) romfs.c
 
+ramfs.o: $(RAMFS_DIR)/ramfs.c $(RAMFS_DIR)/ramfs.h
+	$(CC) -c -o $@ $(OPTIMIZE) $(RAMFS_DIR)/ramfs.c
+
+vfs.o: $(VFS_DIR)/vfs.c $(VFS_DIR)/vfs.h romfs.h $(RAMFS_DIR)/ramfs.h
+	$(CC) -c -o $@ $(OPTIMIZE) $(VFS_DIR)/vfs.c
+
+vfs_posix.o: $(VFS_DIR)/vfs_posix.c $(VFS_DIR)/vfs_posix.h $(VFS_DIR)/vfs.h
+	$(CC) -c -o $@ $(OPTIMIZE) $(VFS_DIR)/vfs_posix.c
+
 # romfs.c/romfs_data.cのAPI単体テスト (Perl統合前の動作確認用)。
 # t/romfs_test.c は romfs.h に依存するので -I. でカレントディレクトリ
 # (romperl/)をinclude pathに追加する。
@@ -124,6 +139,7 @@ test: romperl test-romfs test-inc-require test-zerocopy
 
 clean:
 	rm -f uperlmain.o romperl romfs.o romfs_data.o romfs_data.c root.romfs romfs_test.o romfs_test romfs_xs.o romfs_compile.o
+	rm -f ramfs.o vfs.o vfs_posix.o
 	rm -f $(ROOTFS_PM)
 	rm -f $(T_DIR)/malloctrace.so
 	rmdir rootfs/lib/Exporter rootfs/lib/warnings rootfs/lib/CGI rootfs/lib 2>/dev/null || true

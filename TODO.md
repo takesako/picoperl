@@ -18,8 +18,14 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
   `get{u,g,eu,eg}id`/`set{u,g}id` を無効化・固定値化。`./picoperl ../t/test-noproc.pl`
   も `ALL TESTS PASSED`
 - 未定義 libc シンボル: 88 個 (`nm -u picoperl`, Phase 1時点は96個)。`floor`/`ceil`/
-  `fmod` は double 版もまだ別箇所から直接呼ばれており float 版と両方リンクされて
-  いる(Phase 5 で要精査)
+  `fmod` の double 版は `time64.c`(Unixエポック秒→暦分解、Perlの NV とは無関係)
+  でのみ直接呼ばれており、doubleが本質的に必要と判明・調査済みでクローズ
+- `ramfs/`(書き込み可能インメモリファイルシステム、fopen系API)と`vfs/`
+  (romfs優先・romfsフォールバックのディスパッチ層)を追加。`stat`/`unlink`
+  (パス名だけで完結する操作)を`libc-pico2/sys/stat.h`・`unistd.h`経由で
+  vfsにリダイレクト済み(romperlで動作確認、plain picoperlは無変更)。
+  `open`/`sysopen`は`fdopen`との統合が必須と判明し次のstdio項目に統合
+  (詳細はPhase 5準備/Phase 5セクション参照)
 - `romperl/`(Phase 4)完成: `../picoperl-5.12.5`の`.o`を参照するだけで
   picoperl-5.12.5自体には一切手を入れずに、自作ROMFS形式の埋め込み
   (`.romfs`セクション)、`open/read/seek/close/stat`最小API、
@@ -680,12 +686,60 @@ romfs(読み取り専用)とramfs(書き込み可能)をPerl/PerlIOから見て1
       - 結論: `floor`/`ceil`/`fmod`のdouble版とfloat版が両方リンクされる
         状態は正しい仕様であり、Perlスカラーの数値計算(`Perl_floor`等)は
         既にfloat版を使っている。統一は不要、以後この項目は再検討しない
-- [ ] ファイル系を ROMFS 前提に: `open` `close` `read` `write` `lseek` `stat`
-      `fstat` `opendir` `readdir` `closedir` `chdir` `chmod` `rename` `unlink`
-      `umask` `dup` `isatty` `tmpfile`
+- [x] ファイル系を ROMFS/RAMFS 前提に(`stat`/`unlink` のみ完了、
+      `open`/`close`/`read`/`write`/`lseek`/`fstat`は次項と統合して保留。
+      `opendir`/`readdir`/`closedir`/`chdir`/`chmod`/`rename`/`umask`/
+      `dup`/`isatty`/`tmpfile`は未着手)
+      - `libc-pico2/sys/stat.h`(新規)で`stat()`(パス名ベース)を
+        `picoperl_stat()`に、`libc-pico2/unistd.h`で`unlink()`を
+        `picoperl_unlink()`にリダイレクト。実体は`posix_shim.c`
+        (project root、`make-picoperl.sh`が`picoperl-5.12.5/`にコピーし
+        `Makefile`に`uposix_shim$(_O)`としてビルドルールを追加)の
+        `__attribute__((weak))`な既定実装(本物のシステムコールへの
+        パススルー、plain picoperlの挙動は不変)と、`vfs/vfs_posix.c`
+        の強い実装(`vfs_stat`/`vfs_remove`経由、romperlがリンク時に
+        上書き)の組。pp_requireの`romperl_find_for_compile`と同じ
+        「弱いデフォルト+強い上書き」の仕組みを再利用した
+      - 動作確認(romperl): `-e "lib/feature.pm"`/`-s`が実ファイルの
+        無いROMFS埋め込みモジュールに対して正しくyes/サイズを返す
+        ことを確認(ホストの実ファイルシステムには存在しないことを
+        `ls`で確認済み)。`unlink("lib/feature.pm")`(romfs専用)は
+        `vfs_remove`がramfsしか見ないため正しく失敗しファイルは残る。
+        `t/vfs_posix_test.c`(`vfs/Makefile`の`test`に追加、10項目)で
+        romfsフォールバック/ramfs優先/削除可否をC単体でも検証
+      - 動作確認(plain picoperl): 実ファイルに対する`-e`/`-s`/`unlink`が
+        今まで通り動くこと(弱いデフォルトが本物のシステムコールへ
+        委譲するだけなので無変更)を確認。バイナリサイズも変更前と
+        完全に同一(908,992 bytes)
+      - **重大な発見: `open`/`sysopen`は単独ではリダイレクトできない**。
+        実装当初`open`/`close`/`read`/`write`/`lseek`も同じ弱い/強い
+        方式で`vfs_posix.c`にリダイレクトしたところ、romperlで
+        `sysopen`が`Bad file descriptor`で必ず失敗した。原因を追跡
+        (`perlio.c`の`PerlIOStdio_openn`)した結果、このビルド
+        (`useperlio='undef'`)では`sysopen`が`PerlLIO_open3()`
+        (=リダイレクトした`open()`)で得たfdを**直後に本物の
+        `PerlSIO_fdopen()`(=fdopen)へ渡してFILE*化する**ことが判明。
+        vfsの偽fd(実OSのfdではない)を本物の`fdopen()`に渡せば
+        `EBADF`になるのは当然で、`open()`だけをvfsにリダイレクトしても
+        機能しない。`fdopen`/`fopen`以降のstdio全体(`fread`/`fwrite`/
+        `fclose`/`fseek`等、次のTODO項目そのもの)を同時にvfs対応
+        させない限り、`open`/`close`/`read`/`write`/`lseek`(と、
+        vfs経由のfdが存在しないと無意味な`fstat`)は動かせないと判断し、
+        `libc-pico2/fcntl.h`(削除)・`vfs_posix.c`の該当実装を全て
+        引き上げ、`stat`/`unlink`(パス名だけで完結しfd/FILE*を経由
+        しない)だけを残した
+      - この発見により、TODOの元の想定(「ファイル系をROMFS前提に」→
+        その後「stdioをPerlIO経由でUARTに直結」という順番)は誤りだった
+        と判明。この2項目はuseperlio=undefである限り**分離できない**
+        (sysopenが常にfdopenを経由するため)。次にstdio項目に着手する
+        際、`open`/`close`/`read`/`write`/`lseek`/`fstat`もそこで
+        まとめて対応すること
 - [ ] stdio を PerlIO 経由で UART に直結: `fopen` `fclose` `fread` `fwrite`
       `fgetc` `fputs` `fprintf` `fflush` `fseek` `ftell` `feof` `ferror`
       `clearerr` `fileno` `fdopen` `ungetc` `stdin` `stdout` `stderr`
+      (上記の発見により、`open`/`close`/`read`/`write`/`lseek`/`fstat`の
+      vfs対応もここで合わせて行う。`sysopen`が得たfdを`fdopen`でFILE*化
+      する経路を、vfsバックエンドのFILE*相当物に置き換える設計が必要)
 - [ ] 環境変数の実装: `getenv` `putenv` → freeしないハッシュに格納する
       (Phase4で判明: picoperlは現状`%ENV`を全く populate しない。
       `QUERY_STRING="..." ./picoperl -e 'print $ENV{QUERY_STRING}'`が

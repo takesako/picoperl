@@ -28,6 +28,7 @@ time64.h time64_config.h unixish.h warnings.h XSUB.h perly.act perly.tab miniper
 EOF
 ); do cp -p "$f" "../$OUT/"; done
 cp -p ../generate_uudmap.pl "../$OUT/"
+cp -p ../posix_shim.c "../$OUT/"
 cp -p Makefile.micro "../$OUT/Makefile"
 
 cd "../$OUT"
@@ -38,6 +39,15 @@ perl -0777 -pi -e 's/^uudmap\.h: generate_uudmap.*?^# That.s it, folks!//ms' Mak
 cat >> Makefile <<'EOF'
 uudmap.h bitcount.h: generate_uudmap.pl
 	$(PERL) generate_uudmap.pl uudmap.h bitcount.h
+EOF
+# posix_shim.o: open/close/read/write/lseek/stat/fstat/unlinkをvfs(romfs+
+# ramfs)経由にリダイレクトするための弱いデフォルト実装(本物のシステム
+# コールへのパススルー)。romperlは同名の強いシンボル(vfs/vfs_posix.c)で
+# リンク時に上書きする(pp_requireのromperl_find_for_compileと同じ仕組み)。
+perl -pi -e 's/(uuniversal\$\(_O\) uutf8\$\(_O\) uutil\$\(_O\) uperlapi\$\(_O\))/$1 uposix_shim\$(_O)/' Makefile
+cat >> Makefile <<'EOF'
+uposix_shim$(_O): $(HE) posix_shim.c
+	$(CC) $(CCFLAGS) -o $@ $(CFLAGS) posix_shim.c
 EOF
 perl -0777 -pi -e 's@(    /\* Unregister our signal handler.*?)(    exitstatus = perl_destruct)@#ifndef PERL_MICRO\n$1#endif\n$2@s' miniperlmain.c
 perl -MConfig -pi -e 's/^((?:short|int|long(?:dbl|long)?|ptr|double|[iun]v|u?quad|[iu]\d+|fpos|lseek)(?:size|type)|byteorder|d_quad|quadkind|use64.+|uidtype|gidtype)=.*/"$1=\x27$Config{$1}\x27"/e; s/^(d_const|i_unistd|i_fcntl)=.*/$1=\x27define\x27/' uconfig.sh
