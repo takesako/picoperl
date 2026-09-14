@@ -24,6 +24,23 @@ mode_wants_write(const char *mode)
     return mode[0] == 'w' || mode[0] == 'a' || strchr(mode, '+') != NULL;
 }
 
+/*
+ * romfs/ramfsはどちらも完全一致のフラットな名前空間しか持たないため、
+ * "./foo.pm"と"foo.pm"を別名として扱ってしまう。Perlの@INC探索は
+ * カレントディレクトリのエントリ"."に対して"./foo.pm"のような
+ * パスを作ってopen()を試みるため、これを剥がしておかないと
+ * requireで見つかるはずのramfs/romfs上のファイルが見つからない
+ * (`./`が付くだけで別ファイル扱いになる)。"./"が繰り返されている
+ * 場合(まず無いはずだが)も一応剥がす。
+ */
+static const char *
+normalize(const char *name)
+{
+    while (name[0] == '.' && name[1] == '/')
+        name += 2;
+    return name;
+}
+
 void
 vfs_init(void)
 {
@@ -37,6 +54,7 @@ vfs_fopen(const char *name, const char *mode)
 
     if (!name || !mode)
         return NULL;
+    name = normalize(name);
 
     fp = (vfs_FILE *)malloc(sizeof *fp);
     if (!fp)
@@ -155,6 +173,9 @@ vfs_fclose(vfs_FILE *fp)
 int
 vfs_remove(const char *name)
 {
+    if (!name)
+        return -1;
+    name = normalize(name);
     /* romfs上のファイルは削除できない(read-only前提を崩さない)。 */
     return ramfs_remove(name);
 }
@@ -164,6 +185,10 @@ vfs_stat(const char *name, struct vfs_stat *st)
 {
     struct ramfs_stat rst;
     struct romfs_stat rmst;
+
+    if (!name)
+        return -1;
+    name = normalize(name);
 
     if (ramfs_stat(name, &rst) == 0) {
         if (st)

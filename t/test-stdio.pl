@@ -42,4 +42,17 @@ my $pfline = <$rh>;
 close($rh);
 ok($pfline eq "n=7\n", "printf to a filehandle works via vfs");
 
+# pp_requireの直結zero-copyパスはromfsしか見ないが、そこで見つからない
+# 場合の通常の@INC探索フォールバック(open()相当)は今やvfs_fopen経由
+# なので、実行時にramfsへ書いたモジュールもrequireできるようになった
+# (TODO.md Phase4「Perl/PerlIOへの実接続」で予告されていた副次効果)。
+# @INCの"."エントリはrequire時に"./Foo.pm"のようなパスを作るため、
+# vfs側で先頭の"./"を剥がす正規化をしていないとここで見つからない。
+open(my $mh, '>', 'MyRuntimeMod.pm') or die "open MyRuntimeMod.pm: $!";
+print $mh "package MyRuntimeMod; sub hello { return 42 } 1;\n";
+close($mh);
+require "MyRuntimeMod.pm";
+ok(MyRuntimeMod::hello() == 42, "a module written to ramfs at runtime can be required");
+ok($INC{'MyRuntimeMod.pm'} eq 'MyRuntimeMod.pm', "%INC records it under the unprefixed name");
+
 print "ALL TESTS PASSED\n";

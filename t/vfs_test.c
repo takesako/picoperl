@@ -117,6 +117,25 @@ main(void)
     ok(fp != NULL, "vfs_init does not affect romfs contents");
     vfs_fclose(fp);
 
+    /* 先頭の"./"は無いものとして扱う(@INCの"."エントリがrequireで
+     * "./foo.pm"のようなパスを作るため、これを剥がさないとramfs/romfs
+     * 上のファイルが「別名」扱いになって見つからない)。 */
+    fp = vfs_fopen("dotslash.txt", "w");
+    vfs_fwrite("hi", 1, 2, fp);
+    vfs_fclose(fp);
+    fp = vfs_fopen("./dotslash.txt", "r");
+    ok(fp != NULL, "fopen strips a leading './' (ramfs)");
+    vfs_fclose(fp);
+    {
+        struct vfs_stat st;
+        ok(vfs_stat("./dotslash.txt", &st) == 0 && st.size == 2,
+            "stat also strips a leading './' (ramfs)");
+    }
+    fp = vfs_fopen("./readonly.txt", "r");
+    ok(fp != NULL, "fopen strips a leading './' (romfs fallback)");
+    vfs_fclose(fp);
+    ok(vfs_remove("./dotslash.txt") == 0, "remove also strips a leading './'");
+
     if (failures) {
         printf("FAILED %d\n", failures);
         return 1;

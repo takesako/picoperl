@@ -642,14 +642,27 @@ romfs(読み取り専用)とramfs(書き込み可能)をPerl/PerlIOから見て1
 - [x] ついでに`romperl/romfs.h`のフォーマット説明コメントが、
       センチネルを`;`1byteだけと記述したまま(実装済みの`;`+NUL 2byte
       修正が反映されていなかった)古くなっていたのを修正した
-- [ ] Perl/PerlIOへの実接続はまだ行っていない。Phase 5の「ファイル系を
-      ROMFS前提に」「stdioをPerlIO経由でUARTに直結」に着手する際に、
-      libc-pico2のstdioシムから`vfs_fopen`系を呼ぶようにする想定。
-      `pp_require`の直結zero-copyパス(romfsのみ見る)は変更不要のまま
-      残し、そこでromfsに見つからなかった場合の`@INC`探索フォールバック
-      (通常の`fopen`相当)が将来この`vfs_fopen`経由になれば、実行時に
-      ramfsへ書かれたモジュールも`require`できるようになる副次効果が
-      見込める
+- [x] Perl/PerlIOへの実接続完了(Phase 5のfopen系vfs接続で実現。
+      予告していた副次効果も実際に確認できた):
+      - `pp_require`の直結zero-copyパス(romfsのみ見る)はそのまま。
+        そこでromfsに見つからなかった場合の`@INC`探索フォールバック
+        (通常の`open`相当、実体は`fopen`)が`libc-pico2/stdio.h`経由で
+        `vfs_fopen`に繋がったことで、実行時にramfsへ書かれた
+        モジュールも`require`できるようになった
+      - **動作確認中に見つけた実バグ**: `open(my $fh,'>','Foo.pm')`で
+        ramfsに書いてから`require "Foo.pm"`すると`Can't locate
+        Foo.pm in @INC`で失敗した。原因は、`@INC`の`.`(カレント
+        ディレクトリ)エントリがrequire時に`"./Foo.pm"`のようなパスを
+        組み立てて`open`するのに対し、romfs/ramfsはどちらも完全一致の
+        フラットな名前空間しか持たないため`"./Foo.pm"`と`"Foo.pm"`が
+        別名として扱われてしまうこと。`vfs.c`に`normalize()`
+        (先頭の`"./"`を剥がすだけの薄いヘルパー)を追加し、
+        `vfs_fopen`/`vfs_stat`/`vfs_remove`の入口で適用して解決した
+        (`stat`/`unlink`側にも同じ問題があったため合わせて修正)
+      - `t/vfs_test.c`に正規化の単体テスト4項目、`t/test-stdio.pl`に
+        「ramfsへ実行時に書いたモジュールを`require`できる」ことを
+        確認する統合テスト2項目を追加。既存の全テストもパスすること
+        を確認
 
 ## Phase 5: libc 依存の削減 → libc-pico2/ フォルダで *.h *.c を作成
 
@@ -870,8 +883,8 @@ project root、picoperl-5.12.5にコピーされ本物のlibc関数へパスス�
         引き続き影響する。直すには`perl.c`の該当ループを
         `PERL_MICRO`でも動くようパッチする必要があり、より踏み込んだ
         別作業として切り出す
-- [ ] `qsort` → `pp_sort.c` 内製ソートに寄せる
-- [ ] `rand` / `srand` → 内製 PRNG に置き換え
+- [ ] `qsort` → `pp_sort.c` 内製ソートに、スタック領域が限られた簡易実装
+- [ ] `rand` / `srand` → 内製 PRNG に置き換える
 - [ ] `localtime` / `time` → `time64.c` + 固定エポックの時刻を返す
 - [ ] `malloc` / `calloc` / `realloc` / `free` → 固定ヒープアロケータ
 - [ ] `__ctype_b_loc` (locale 依存) を外す → `locale.c` の除去とセット
