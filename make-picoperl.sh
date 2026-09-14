@@ -113,5 +113,5 @@ make clean
 make -j"$JOBS" CC="$CC" LD="$CC" OPTIMIZE="$OPTIMIZE" LDFLAGS="$LDFLAGS"
 ./picoperl -e 'print "picoperl $^V OK\n"'
 printf 'binary: '; wc -c < picoperl
-./picoperl ../test-float.pl
-./picoperl ../test-noproc.pl
+./picoperl ../t/test-float.pl
+./picoperl ../t/test-noproc.pl

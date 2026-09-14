@@ -10,10 +10,12 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
 - NV は float 化済み: `nvtype='float'` / `nvsize='4'` / `ivsize='8'`
 - `NV_DIG`/`NV_MANT_DIG`/`NV_MIN`/`NV_MAX`/`NV_EPSILON` も `FLT_*` 基準に修正済み
   (Phase 3)。数値の文字列化(`print`/`sprintf`のデフォルト精度)が float 相当になった
-- `./picoperl test-float.pl` は `# NV=float` + `ALL TESTS PASSED`(stringify precision
-  テストを追加)
+- `./picoperl ../t/test-float.pl` は `# NV=float` + `ALL TESTS PASSED`(stringify
+  precision テストを追加)。テスト一式は `t/` フォルダに集約済み(`test-float.pl`/
+  `test-noproc.pl`/`test-inc-require.pl`/`romfs_test.c`/`malloctrace.c`/
+  `test-zerocopy.sh`)
 - `libc-pico2/` フォルダ(Phase 5)で `fork`/`exec*`/`pipe`/`kill`/`wait*`/`sleep`/
-  `get{u,g,eu,eg}id`/`set{u,g}id` を無効化・固定値化。`./picoperl test-noproc.pl`
+  `get{u,g,eu,eg}id`/`set{u,g}id` を無効化・固定値化。`./picoperl ../t/test-noproc.pl`
   も `ALL TESTS PASSED`
 - 未定義 libc シンボル: 88 個 (`nm -u picoperl`, Phase 1時点は96個)。`floor`/`ceil`/
   `fmod` は double 版もまだ別箇所から直接呼ばれており float 版と両方リンクされて
@@ -413,12 +415,17 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
       Carp;`の`croak`/`carp`/`confess`、`use CGI;`の`escapeHTML`が
       引き続き動くこと、`test-inc-require.pl`/`test-float.pl`/
       `test-noproc.pl`が通ることを確認
-- [x] **実測でのゼロコピー確認**: LD_PRELOAD mallocトレーサ(使い捨て、
-      コミットはしない)で`use strict; use warnings; use Carp;`実行時に、
-      Carp.pm(4517B)/Exporter.pm(1184B)/warnings.pm(10222B)/
-      strict.pm(576B)のいずれのサイズに一致する`malloc`も**1回も
-      発生しない**ことを確認した(旧filter_cache方式では各ファイルに
-      つき1回発生していたので、それがゼロになったことを実測で確認)
+- [x] **実測でのゼロコピー確認**: LD_PRELOAD mallocトレーサで
+      `use strict; use warnings; use Carp;`実行時に、Carp.pm/Exporter.pm/
+      warnings.pm/strict.pm等のいずれのサイズに一致する`malloc`/`realloc`も
+      **1回も発生しない**ことを確認した(旧filter_cache方式では各ファイルに
+      つき1回発生していたので、それがゼロになったことを実測で確認)。
+      当初は使い捨てのデバッグツールだったが、再現・自動化できるよう
+      `t/malloctrace.c`(トレーサ本体)+`t/test-zerocopy.sh`(検証スクリプト、
+      `romperl/rootfs/lib/`配下の実際のファイルサイズを都度取得して
+      malloc/reallocログと突き合わせる)としてコミットし、
+      `make -C romperl test`の`test-zerocopy`ターゲットから自動実行される
+      回帰テストにした(詳細は下記「テストを t/ に整理」参照)
 
 ### 実装中に遭遇した重大バグ: センチネル1byteだけでは不十分だった
 
@@ -470,6 +477,48 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
 - [ ] 上記が安定したら、既存の`Romperl::Boot`(`@INC`フック)は
       直接パスがカバーする範囲では二度と呼ばれなくなり冗長化する。
       当面はフォールバックとして残すか、削除して一本化するかを判断する
+
+### Phase 4 追加: テストを t/ フォルダに整理し、mallocトレーサをコミット
+
+これまでテストファイルはプロジェクトルート(`test-float.pl`/
+`test-noproc.pl`)と`romperl/`(`test-inc-require.pl`/`romfs_test.c`)に
+分散していた。また実測でのゼロコピー検証に使ったLD_PRELOAD mallocトレーサは
+使い捨てで`/tmp`に置いたままコミットしていなかった。再現性を上げるため
+`t/`フォルダに集約し、mallocトレーサも回帰テストとしてコミットした。
+
+- [x] `test-float.pl`/`test-noproc.pl`(プロジェクトルート)と
+      `romperl/test-inc-require.pl`/`romperl/romfs_test.c`を`t/`に
+      `git mv`で移動。`romfs_test.c`は`romfs.h`(`romperl/`側)に依存するため、
+      `romperl/Makefile`のビルドルールに`-I.`を追加してカレントディレクトリ
+      (`romperl/`)をinclude pathに含めるよう修正(`t/`から見た相対パスでは
+      `"romfs.h"`を解決できないため)
+- [x] `make-picoperl.sh`末尾の`./picoperl ../test-float.pl`等と、
+      `romperl/Makefile`の`test`/`test-inc-require`ターゲットを、
+      それぞれ`../t/test-float.pl`等の新しいパスに更新
+- [x] `t/malloctrace.c`としてLD_PRELOAD mallocトレーサをコミット
+      (`malloc`/`realloc`を閾値`MALLOCTRACE_MIN`(デフォルト64byte)以上の
+      サイズだけログし、`realloc`のサイズが符号付き解釈で負になる異常
+      (センチネル不足によるバッファ境界超え等)は`UNDERFLOW`として別枠で
+      警告する。まさにこの仕組みの原型で`;`1byteセンチネル不足バグを
+      発見した)
+- [x] `t/test-zerocopy.sh`としてゼロコピー検証を自動化。
+      `malloctrace.so`をビルドし、`romperl -e 'use strict; use warnings;
+      use Carp;'`を実行、`romperl/rootfs/lib/`配下の実ファイルサイズ
+      (ビルドの度にminify.plの出力次第で変わりうるため固定値にせず
+      都度`wc -c`で取得)に一致する`malloc`/`realloc`が無いこと、および
+      `UNDERFLOW`ログが無いことを確認する
+- [x] `romperl/Makefile`に`test-zerocopy`ターゲットを追加し、`test`
+      ターゲット(`test-romfs`/`test-inc-require`/`test-float.pl`/
+      `test-noproc.pl`と並ぶ形)から自動実行されるようにした。
+      `clean`ターゲットで`malloctrace.so`(生成物)も削除する
+- [x] `.gitignore`に`*.so`を追加(`malloctrace.so`はビルドの度に
+      作り直す生成物としてコミットしない)
+- [x] 動作確認: `make -C romperl test`一式(`romfs_test`13項目 +
+      `test-inc-require.pl`4項目 + `test-zerocopy.sh`(strict/Carp/
+      Exporter/Exporter::Heavy/warnings/warnings::register の6項目) +
+      `test-float.pl`/`test-noproc.pl`回帰)が新しいパス構成で
+      全てパスすることを確認。`./make-picoperl.sh`単体(`t/test-float.pl`/
+      `t/test-noproc.pl`)も引き続きパス
 
 ## Phase 5: libc 依存の削減 → libc-pico2/ フォルダで *.h *.c を作成
 
@@ -551,7 +600,11 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
 ./make-picoperl.sh
 cd picoperl-5.12.5
 ./picoperl -e 'print 0.123, "OK\n"'
-./picoperl ../test-float.pl
+./picoperl ../t/test-float.pl
 nm -u picoperl | wc -l
 wc -c < picoperl
 ```
+
+テスト一式は `t/` フォルダに集約している(`test-float.pl`/`test-noproc.pl`/
+`test-inc-require.pl`/`romfs_test.c`/`malloctrace.c`/`test-zerocopy.sh`)。
+`romperl` 側は `make -C romperl test` で一括実行できる。

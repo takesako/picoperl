@@ -1,7 +1,8 @@
 /*
  * romfs.c の open/read/seek/close/stat を、Perl統合前に単体で検証するための
  * スタンドアロンテスト。mkromfs.pl --carray で埋め込んだ romfs_image[] を
- * そのまま使う。
+ * そのまま使う。t/ に置くが romperl/romfs.h に依存するため、
+ * romperl/Makefile 側でカレントディレクトリをinclude pathに追加してビルドする。
  */
 #include <stdio.h>
 #include <string.h>

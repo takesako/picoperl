@@ -97,8 +97,12 @@ romfs.o: romfs.c romfs.h
 	$(CC) -c -o $@ $(OPTIMIZE) romfs.c
 
 # romfs.c/romfs_data.cのAPI単体テスト (Perl統合前の動作確認用)。
-romfs_test: romfs_test.c romfs.o romfs_data.o
-	$(CC) -o $@ $(OPTIMIZE) romfs_test.c romfs.o romfs_data.o $(LDFLAGS)
+# t/romfs_test.c は romfs.h に依存するので -I. でカレントディレクトリ
+# (romperl/)をinclude pathに追加する。
+T_DIR = ../t
+
+romfs_test: $(T_DIR)/romfs_test.c romfs.o romfs_data.o
+	$(CC) -o $@ $(OPTIMIZE) -I. $(T_DIR)/romfs_test.c romfs.o romfs_data.o $(LDFLAGS)
 
 test-romfs: romfs_test
 	./romfs_test
@@ -106,15 +110,22 @@ test-romfs: romfs_test
 # romperl本体を使ったテスト一式。既存のpicoperl向けテストが romperl でも
 # 通ること(回帰確認)と、ROMFS経由のrequire/useが動くことを確認する。
 test-inc-require: romperl
-	./romperl test-inc-require.pl
+	./romperl $(T_DIR)/test-inc-require.pl
 
-test: romperl test-romfs test-inc-require
-	./romperl ../test-float.pl
-	./romperl ../test-noproc.pl
+# LD_PRELOAD mallocトレーサ(t/malloctrace.c)を使い、pp_requireを直接
+# ROMFSに繋いだtrue zero-copy経路が実際にファイルサイズ分のmalloc/realloc
+# を発生させていないことを実測で検証する(t/test-zerocopy.sh参照)。
+test-zerocopy: romperl $(ROOTFS_PM)
+	$(T_DIR)/test-zerocopy.sh
+
+test: romperl test-romfs test-inc-require test-zerocopy
+	./romperl $(T_DIR)/test-float.pl
+	./romperl $(T_DIR)/test-noproc.pl
 
 clean:
 	rm -f uperlmain.o romperl romfs.o romfs_data.o romfs_data.c root.romfs romfs_test.o romfs_test romfs_xs.o romfs_compile.o
 	rm -f $(ROOTFS_PM)
+	rm -f $(T_DIR)/malloctrace.so
 	rmdir rootfs/lib/Exporter rootfs/lib/warnings rootfs/lib/CGI rootfs/lib 2>/dev/null || true
 
-.PHONY: all clean test test-romfs test-inc-require
+.PHONY: all clean test test-romfs test-inc-require test-zerocopy
