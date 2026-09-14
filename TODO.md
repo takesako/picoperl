@@ -520,6 +520,56 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
       全てパスすることを確認。`./make-picoperl.sh`単体(`t/test-float.pl`/
       `t/test-noproc.pl`)も引き続きパス
 
+## Phase 5 準備: 簡易 RAMFS (書き込み可能インメモリファイルシステム)
+
+romfs(romperl/romfs.h)はFlashに埋め込む読み取り専用イメージで、実行時の
+ファイル新規作成・更新・削除ができない。Phase 5の「ファイル系をROMFS前提に」
+「stdioをPerlIO経由でUARTに直結」より前に、libcの`fopen`系の裏側で動く
+書き込み可能なインメモリファイルシステムを単体で用意しておく。
+
+方針(ユーザー指示どおり):
+- POSIX互換は目指さない。API名/引数はfopen/fread/fwrite/fseek/ftell/
+  fclose/removeに合わせるが、意味論は最低限(モード文字列は`r`/`w`/`a`/
+  `r+`/`w+`/`a+`のみ解釈、`b`は無視)
+- 性能よりシンプルさ優先。事前の大きなメモリ確保はせず、書き込みの都度
+  必要な分だけmalloc/reallocに頼ってよい(倍々確保などの最適化はしない)
+- まだPerl/PerlIOには組み込まず、Cだけで作成・更新・削除を単体テスト
+  できるようにする
+
+- [x] `ramfs/ramfs.h` / `ramfs/ramfs.c` を新規作成
+      - データ構造: ファイル数上限を決め打ちしないフラットな単方向リスト
+        (`struct ramfs_inode { name, data, size, next }`)。romfsと同じ
+        フラットな名前空間(ディレクトリ階層なし、名前は31文字+NUL)
+      - `ramfs_fopen(name, mode)`: `w`は無ければ新規作成・あれば`trunc`、
+        `a`は末尾に追記(`fseek`で動かしても書き込みは常に末尾)、
+        `r+`は既存ファイルの部分上書き。無いファイルを`r`/`r+`で開くと
+        `NULL`
+      - `ramfs_fwrite`: 書き込み範囲が現在のsizeを超える時だけ
+        `realloc`でちょうど必要な分だけ伸ばす。`fseek`で末尾より先に
+        飛んでから書く(sparse write)と、間の隙間は`memset`でゼロ埋め
+        する
+      - `ramfs_remove(name)`: リストから外して`data`/inode本体を`free`。
+        既知の制約として、削除対象を指す`ramfs_FILE*`を別途開いたまま
+        削除すると、その後のアクセスは未定義動作になる(参照カウント
+        等の安全策は「シンプルさ優先」の方針により実装していない)
+      - `ramfs_init()`: 全ファイルを解放して空の状態に戻す
+        (起動時初期化やテストのリセット用)
+- [x] `t/ramfs_test.c` を新規作成し、Cから単体で動作確認
+      - 新規作成(`w`)・読み取り(`r`)・部分上書き(`r+`)・
+        トランケート再作成(`w`で開き直す)・追記(`a`/`a+`、seekしても
+        常に末尾に書かれること)・`fseek`(SET/CUR/END、負値は失敗)・
+        sparse writeのゼロ埋め・削除(`remove`、削除後は`r`で開けない/
+        `stat`も失敗する/同名で再作成できる)・名前長すぎエラー・
+        `ramfs_init`での全消去、の29項目
+      - `ramfs/Makefile`に`test`ターゲットを追加(`make -C ramfs test`)。
+        `-Wall -Wextra -Werror`で警告0件を確認
+      - 動作確認: 29項目全てパス。まだpicoperl/romperlには未接続
+- [ ] Perl/PerlIOへの接続はまだ行っていない。Phase 5の「ファイル系を
+      ROMFS前提に」「stdioをPerlIO経由でUARTに直結」に着手する際に、
+      書き込み可能な部分(新規作成するファイル、`open(... '>')`等)は
+      このramfsに、読み取り専用の同梱モジュール(lib/*.pm等)はromfsに
+      振り分ける方針を検討する
+
 ## Phase 5: libc 依存の削減 → libc-pico2/ フォルダで *.h *.c を作成
 
 - [ ] `#include <*.h>` で `../libc-pico2/` フォルダが優先されて読み込まれるように
