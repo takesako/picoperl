@@ -22,16 +22,18 @@ all: romperl
 # romfs.o/romfs_data.o/ramfs.o/vfs.oはperl.hに依存しないのでOPTIMIZEのみで
 # 足りるが、romfs_xs.oはperl.h/XSUB.hを使うためmain.cと同じCFLAGS
 # (PERL_CORE等)でコンパイルする。異なるdefineでABIがずれるのを防ぐため。
-# vfs_posix.oは、picoperl-5.12.5/posix_shim.o(弱いデフォルト、本物の
-# システムコールへのパススルー)をリンク時に上書きしてopen/close/read/
-# write/lseek/stat/fstat/unlinkをROMFS/RAMFS経由にする(pp_requireの
-# romperl_find_for_compileと同じ弱い/強いシンボルの仕組み)。
-romperl: uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o ramfs.o vfs.o vfs_posix.o
+# vfs_posix.o/vfs_stdio.oは、picoperl-5.12.5/posix_shim.o・stdio_shim.o
+# (弱いデフォルト、本物のシステムコールへのパススルー)をリンク時に
+# 上書きし、stat/unlink(vfs_posix.o)とfopen系(vfs_stdio.o)をROMFS/RAMFS
+# 経由にする(pp_requireのromperl_find_for_compileと同じ弱い/強い
+# シンボルの仕組み)。open/close/read/write/lseek/fstatは対象外
+# (TODO.md「Phase 5」参照)。
+romperl: uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o ramfs.o vfs.o vfs_posix.o vfs_stdio.o
 	@if [ -z "$(strip $(PICOPERL_OBJS))" ]; then \
 		echo "error: $(PICOPERL_DIR)/*.o が無い。先に ../make-picoperl.sh を実行すること" >&2; \
 		exit 1; \
 	fi
-	$(CC) -o $@ uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o ramfs.o vfs.o vfs_posix.o $(PICOPERL_OBJS) $(LDFLAGS) -lm
+	$(CC) -o $@ uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o ramfs.o vfs.o vfs_posix.o vfs_stdio.o $(PICOPERL_OBJS) $(LDFLAGS) -lm
 
 uperlmain.o: main.c romfs.h
 	$(CC) -c -o $@ $(CFLAGS) main.c
@@ -111,6 +113,9 @@ vfs.o: $(VFS_DIR)/vfs.c $(VFS_DIR)/vfs.h romfs.h $(RAMFS_DIR)/ramfs.h
 vfs_posix.o: $(VFS_DIR)/vfs_posix.c $(VFS_DIR)/vfs_posix.h $(VFS_DIR)/vfs.h
 	$(CC) -c -o $@ $(OPTIMIZE) $(VFS_DIR)/vfs_posix.c
 
+vfs_stdio.o: $(VFS_DIR)/vfs_stdio.c $(VFS_DIR)/vfs_stdio.h $(VFS_DIR)/vfs.h
+	$(CC) -c -o $@ $(OPTIMIZE) $(VFS_DIR)/vfs_stdio.c
+
 # romfs.c/romfs_data.cのAPI単体テスト (Perl統合前の動作確認用)。
 # t/romfs_test.c は romfs.h に依存するので -I. でカレントディレクトリ
 # (romperl/)をinclude pathに追加する。
@@ -133,15 +138,20 @@ test-inc-require: romperl
 test-zerocopy: romperl $(ROOTFS_PM)
 	$(T_DIR)/test-zerocopy.sh
 
-test: romperl test-romfs test-inc-require test-zerocopy
+# open($fh,mode,path)/print/read/closeがvfs(romfs+ramfs)経由で動くことを
+# 確認するPerl統合テスト。
+test-stdio: romperl
+	./romperl $(T_DIR)/test-stdio.pl
+
+test: romperl test-romfs test-inc-require test-zerocopy test-stdio
 	./romperl $(T_DIR)/test-float.pl
 	./romperl $(T_DIR)/test-noproc.pl
 
 clean:
 	rm -f uperlmain.o romperl romfs.o romfs_data.o romfs_data.c root.romfs romfs_test.o romfs_test romfs_xs.o romfs_compile.o
-	rm -f ramfs.o vfs.o vfs_posix.o
+	rm -f ramfs.o vfs.o vfs_posix.o vfs_stdio.o
 	rm -f $(ROOTFS_PM)
 	rm -f $(T_DIR)/malloctrace.so
 	rmdir rootfs/lib/Exporter rootfs/lib/warnings rootfs/lib/CGI rootfs/lib 2>/dev/null || true
 
-.PHONY: all clean test test-romfs test-inc-require test-zerocopy
+.PHONY: all clean test test-romfs test-inc-require test-zerocopy test-stdio

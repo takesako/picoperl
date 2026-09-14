@@ -16,6 +16,9 @@ vfs.o: vfs.c vfs.h
 vfs_posix.o: vfs_posix.c vfs_posix.h vfs.h
 	$(CC) -c -o $@ $(OPTIMIZE) vfs_posix.c
 
+vfs_stdio.o: vfs_stdio.c vfs_stdio.h vfs.h
+	$(CC) -c -o $@ $(OPTIMIZE) vfs_stdio.c
+
 ramfs.o: $(RAMFS_DIR)/ramfs.c $(RAMFS_DIR)/ramfs.h
 	$(CC) -c -o $@ $(OPTIMIZE) $(RAMFS_DIR)/ramfs.c
 
@@ -39,15 +42,20 @@ vfs_test_romfs_data.o: vfs_test_romfs_data.c
 vfs_test: $(T_DIR)/vfs_test.c vfs.o ramfs.o romfs.o vfs_test_romfs_data.o
 	$(CC) -o $@ $(OPTIMIZE) -I. $(T_DIR)/vfs_test.c vfs.o ramfs.o romfs.o vfs_test_romfs_data.o
 
-# t/vfs_posix_test.c も同じromfsイメージ(vfs_test_romfs_data.o)を使い回す。
+# t/vfs_posix_test.c・t/vfs_stdio_test.c も同じromfsイメージ
+# (vfs_test_romfs_data.o)を使い回す。
 vfs_posix_test: $(T_DIR)/vfs_posix_test.c vfs.o vfs_posix.o ramfs.o romfs.o vfs_test_romfs_data.o
 	$(CC) -o $@ $(OPTIMIZE) -I. $(T_DIR)/vfs_posix_test.c vfs.o vfs_posix.o ramfs.o romfs.o vfs_test_romfs_data.o
 
-test: vfs_test vfs_posix_test
+vfs_stdio_test: $(T_DIR)/vfs_stdio_test.c vfs.o vfs_stdio.o ramfs.o romfs.o vfs_test_romfs_data.o
+	$(CC) -o $@ $(OPTIMIZE) -I. $(T_DIR)/vfs_stdio_test.c vfs.o vfs_stdio.o ramfs.o romfs.o vfs_test_romfs_data.o
+
+test: vfs_test vfs_posix_test vfs_stdio_test
 	./vfs_test
 	./vfs_posix_test
+	./vfs_stdio_test
 
 clean:
-	rm -f vfs.o vfs_posix.o ramfs.o romfs.o vfs_test_romfs_data.o vfs_test_romfs_data.c vfs_test.romfs vfs_test vfs_posix_test
+	rm -f vfs.o vfs_posix.o vfs_stdio.o ramfs.o romfs.o vfs_test_romfs_data.o vfs_test_romfs_data.c vfs_test.romfs vfs_test vfs_posix_test vfs_stdio_test
 
 .PHONY: all clean test

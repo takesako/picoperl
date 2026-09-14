@@ -22,9 +22,14 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
   でのみ直接呼ばれており、doubleが本質的に必要と判明・調査済みでクローズ
 - `ramfs/`(書き込み可能インメモリファイルシステム、fopen系API)と`vfs/`
   (romfs優先・romfsフォールバックのディスパッチ層)を追加。`stat`/`unlink`
-  (パス名だけで完結する操作)を`libc-pico2/sys/stat.h`・`unistd.h`経由で
-  vfsにリダイレクト済み(romperlで動作確認、plain picoperlは無変更)。
-  `open`/`sysopen`は`fdopen`との統合が必須と判明し次のstdio項目に統合
+  と、fopen系一式(`fopen`/`fclose`/`fread`/`fwrite`/`fseek`/`ftell`/
+  `feof`/`ferror`/`clearerr`/`fflush`/`fgetc`/`fputs`/`fileno`/`fprintf`)
+  をvfsにリダイレクト済み(romperlで動作確認、plain picoperlは無変更)。
+  このビルド(`useperlio=undef`)ではPerlの通常の`open()`が`fopen()`に
+  直結しており(`sysopen`だけが例外)、fopen系だけで`open`/`print`/
+  `<$fh>`/`close`が一通り動く。`open`/`close`/`read`/`write`/`lseek`
+  (POSIXの生fd系)は対象外(ユーザー指示: 自作libcに置き換えた際に
+  呼ばれないなら実装不要)
   (詳細はPhase 5準備/Phase 5セクション参照)
 - `romperl/`(Phase 4)完成: `../picoperl-5.12.5`の`.o`を参照するだけで
   picoperl-5.12.5自体には一切手を入れずに、自作ROMFS形式の埋め込み
@@ -734,12 +739,54 @@ romfs(読み取り専用)とramfs(書き込み可能)をPerl/PerlIOから見て1
         (sysopenが常にfdopenを経由するため)。次にstdio項目に着手する
         際、`open`/`close`/`read`/`write`/`lseek`/`fstat`もそこで
         まとめて対応すること
-- [ ] stdio を PerlIO 経由で UART に直結: `fopen` `fclose` `fread` `fwrite`
-      `fgetc` `fputs` `fprintf` `fflush` `fseek` `ftell` `feof` `ferror`
-      `clearerr` `fileno` `fdopen` `ungetc` `stdin` `stdout` `stderr`
-      (上記の発見により、`open`/`close`/`read`/`write`/`lseek`/`fstat`の
-      vfs対応もここで合わせて行う。`sysopen`が得たfdを`fdopen`でFILE*化
-      する経路を、vfsバックエンドのFILE*相当物に置き換える設計が必要)
+- [x] fopen系(`fopen`/`fclose`/`fread`/`fwrite`/`fseek`/`ftell`/`feof`/
+      `ferror`/`clearerr`/`fflush`/`fgetc`/`fputs`/`fileno`/`fprintf`)を
+      vfs(romfs+ramfs)経由にリダイレクト。`open`/`close`/`read`/`write`/
+      `lseek`/`fstat`(POSIXの生fd系)・`fdopen`/`ungetc`/`tmpfile`は対象外
+      (ユーザー指示: 「自作のlibcに置き換えた際に呼ばれることがなければ、
+      POSIX系のopen/closeは一切実装しなくて良い。libcのfopen系だけの
+      対応で良い」)
+      - **鍵となる発見**: このビルド(`useperlio=undef`)では`PerlIO`が
+        `#define PerlIO FILE`されており(`perlsdio.h`)、Perlの通常の
+        `open()`は`#define PerlIO_open PerlSIO_fopen`により**`fopen()`に
+        直結**していて、POSIXの生fd(`open`/`close`/`read`/`write`/
+        `lseek`)や`fdopen()`を一切経由しない。これらを経由するのは
+        `sysopen`(数値モードのopen)だけであり、それは対象外として
+        割り切れる、という設計の裏付けが取れた
+      - `libc-pico2/stdio.h`(新規)で各関数をリダイレクト。実体は
+        `stdio_shim.c`(project root、`posix_shim.c`と同じ手順で
+        `make-picoperl.sh`が`picoperl-5.12.5/`にコピーし
+        `ustdio_shim$(_O)`としてビルド)の弱いデフォルト実装と、
+        `vfs/vfs_stdio.c`の強い実装(romperlがリンク時に上書き)の組
+      - **FILE\*の扱い**: `picoperl_fopen()`が返す`FILE*`はglibc本物の
+        構造体ではなく、`vfs_FILE*`をラップしmagic numberを付けた
+        独自構造体へのポインタ(呼び出し側は常にこのヘッダ経由の
+        関数だけでオペークに扱うので実際のレイアウトの違いは問題に
+        ならない)。`fread`/`fwrite`/`fclose`等は渡された`FILE*`が
+        このmagicを持つか調べ、持たなければ「本物のFILE\*」
+        (stdin/stdout/stderr等)とみなして本物のfread/fwrite/fclose等に
+        そのまま委譲する(ポインタ先頭1ワードだけを見る割り切った
+        判定だが、本物のglibc FILE構造体の同オフセットが偶然
+        一致する可能性は無視できるほど低い)
+      - **重大な追加発見(実装中に判明)**: `fopen()`を無条件にvfsへ
+        リダイレクトすると、**romperl自身がPerlスクリプトファイルを
+        コマンドライン引数で受け取って開く経路**(perl.cのスクリプト
+        読み込みも同じ`fopen()`を通る)まで巻き込んでしまい、
+        `./romperl foo.pl`が常に`Can't open perl script`で失敗する
+        重大な回帰を引き起こした。修正として、`picoperl_fopen()`は
+        読み取り専用(`"r"`、`+`を含まない)でvfsに見つからない場合に
+        限り、開発ホストの実ファイルシステムへの`fopen()`にフォール
+        バックするようにした。書き込みを伴うモードは`vfs_fopen`が
+        ほぼ確実に成功するためこのフォールバックには来ない(=vfsの
+        書き込みは常にvfs専用という方針は崩れない)。実機(RP2350、
+        実ファイルシステム自体が存在しない)ではこの分岐は単に
+        失敗するだけで無害
+      - 動作確認: `t/vfs_stdio_test.c`(C単体、21項目、`make -C vfs test`)
+        + `t/test-stdio.pl`(Perl統合、`open`/`print`/`close`/`readline`/
+        追記/`printf`/ROMFS埋め込みファイルの直接open、5項目、
+        `make -C romperl test`の`test-stdio`ターゲット)。`made.txt`等が
+        ホストの実ファイルシステムには一切書かれないことも確認。
+        plain picoperlは無変更(既存回帰テスト全てパス)
 - [ ] 環境変数の実装: `getenv` `putenv` → freeしないハッシュに格納する
       (Phase4で判明: picoperlは現状`%ENV`を全く populate しない。
       `QUERY_STRING="..." ./picoperl -e 'print $ENV{QUERY_STRING}'`が

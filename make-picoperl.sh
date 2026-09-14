@@ -29,6 +29,7 @@ EOF
 ); do cp -p "$f" "../$OUT/"; done
 cp -p ../generate_uudmap.pl "../$OUT/"
 cp -p ../posix_shim.c "../$OUT/"
+cp -p ../stdio_shim.c "../$OUT/"
 cp -p Makefile.micro "../$OUT/Makefile"
 
 cd "../$OUT"
@@ -40,14 +41,29 @@ cat >> Makefile <<'EOF'
 uudmap.h bitcount.h: generate_uudmap.pl
 	$(PERL) generate_uudmap.pl uudmap.h bitcount.h
 EOF
-# posix_shim.o: open/close/read/write/lseek/stat/fstat/unlinkをvfs(romfs+
-# ramfs)経由にリダイレクトするための弱いデフォルト実装(本物のシステム
-# コールへのパススルー)。romperlは同名の強いシンボル(vfs/vfs_posix.c)で
-# リンク時に上書きする(pp_requireのromperl_find_for_compileと同じ仕組み)。
+# posix_shim.o: stat/unlink(パス名だけで完結する操作)をvfs(romfs+ramfs)
+# 経由にリダイレクトするための弱いデフォルト実装(本物のシステムコールへの
+# パススルー)。romperlは同名の強いシンボル(vfs/vfs_posix.c)でリンク時に
+# 上書きする(pp_requireのromperl_find_for_compileと同じ仕組み)。
+# open/close/read/write/lseek/fstatはvfs対応していない
+# (TODO.md「Phase 5」参照: このビルドではsysopenがopen()で得たfdを
+# 本物のfdopen()に渡す経路が必須で、fdだけvfs化しても動かないため)。
 perl -pi -e 's/(uuniversal\$\(_O\) uutf8\$\(_O\) uutil\$\(_O\) uperlapi\$\(_O\))/$1 uposix_shim\$(_O)/' Makefile
 cat >> Makefile <<'EOF'
 uposix_shim$(_O): $(HE) posix_shim.c
 	$(CC) $(CCFLAGS) -o $@ $(CFLAGS) posix_shim.c
+EOF
+# stdio_shim.o: fopen系(fopen/fclose/fread/fwrite/fseek/ftell/feof/
+# ferror/clearerr/fflush/fgetc/fputs/fileno/fprintf)をvfs経由に
+# リダイレクトするための弱いデフォルト実装。posix_shim.oと同じ
+# 弱い/強いシンボルの仕組みで、romperlはvfs/vfs_stdio.cの強い実装
+# (ROMFS/RAMFS経由)で上書きする。このビルド(useperlio=undef)では
+# 通常のopen()がPerlIO_open=fopen()に直結しているため、fopen系だけ
+# 対応すればsysopen以外のファイルI/Oは動く。
+perl -pi -e 's/(uuniversal\$\(_O\) uutf8\$\(_O\) uutil\$\(_O\) uperlapi\$\(_O\) uposix_shim\$\(_O\))/$1 ustdio_shim\$(_O)/' Makefile
+cat >> Makefile <<'EOF'
+ustdio_shim$(_O): $(HE) stdio_shim.c
+	$(CC) $(CCFLAGS) -o $@ $(CFLAGS) stdio_shim.c
 EOF
 perl -0777 -pi -e 's@(    /\* Unregister our signal handler.*?)(    exitstatus = perl_destruct)@#ifndef PERL_MICRO\n$1#endif\n$2@s' miniperlmain.c
 perl -MConfig -pi -e 's/^((?:short|int|long(?:dbl|long)?|ptr|double|[iun]v|u?quad|[iu]\d+|fpos|lseek)(?:size|type)|byteorder|d_quad|quadkind|use64.+|uidtype|gidtype)=.*/"$1=\x27$Config{$1}\x27"/e; s/^(d_const|i_unistd|i_fcntl)=.*/$1=\x27define\x27/' uconfig.sh
