@@ -42,6 +42,15 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
   (POSIXの生fd系)は対象外(ユーザー指示: 自作libcに置き換えた際に
   呼ばれないなら実装不要)
   (詳細はPhase 5準備/Phase 5セクション参照)
+- `qsort`(内製挿入ソート)・`rand`/`srand`(内製LCG)・`time`/`localtime`
+  (固定エポック+自前のUTC暦計算)・`is*`/`to*`系(`__ctype_b_loc`依存の
+  locale判定テーブルを使わないASCII固定分類)もgetenv/putenvと同じ
+  「romperlだけ自前実装、plain picoperlは本物のlibcのまま」の型で
+  libc依存を断った。`libc-pico2/`は`libc/`にリネームし、`env/`・`sort/`・
+  `rand/`・`time/`という別フォルダに分かれていたこれらの実装を全部
+  `libc/`直下にフラットに統合(サブフォルダ無し、`libc/Makefile`1つで
+  まとめて単体テスト可能)。`nm -u romperl`から該当シンボルが全て消え、
+  `nm -u picoperl`には残ることを確認済み
 - `romperl/`(Phase 4)完成: `../picoperl-5.12.5`の`.o`を参照するだけで
   picoperl-5.12.5自体には一切手を入れずに、自作ROMFS形式の埋め込み
   (`.romfs`セクション)、`open/read/seek/close/stat`最小API、
@@ -1029,7 +1038,62 @@ libc代替モジュールを、既存の`libc-pico2/`(*.hのシムヘッダを�
         `time()`が固定値0を返すこと、`localtime(0)`が
         `gmtime(0)`と一致すること、うるう日を正しく扱うことを確認
 - [ ] `malloc` / `calloc` / `realloc` / `free` → 固定ヒープアロケータ
-- [ ] `__ctype_b_loc` (locale 依存) を外す → `locale.c` の除去とセット
+- [x] `__ctype_b_loc`(locale依存)を外した(romperlのみ。plain picoperlは
+      今まで通り本物のlibc `is*`/`to*`(3)を使う。これまでと同じ
+      「弱いデフォルト(project rootの`ctype_shim.c`)+ romperl側の
+      強い実装(`libc/ctype.c`)」の型)
+      - `nm -u`で確認したところ、`setlocale`/`nl_langinfo`等は元々一切
+        リンクされておらず(`d_setlocale='undef'`)、locale依存で実際に
+        残っていたのは`__ctype_b_loc`(`is*`/`to*`マクロが内部で参照する
+        locale依存の文字分類テーブル)1つだけだった
+      - このビルドはsetlocale()を一度も呼ばないため実行中ずっと"C"
+        (デフォルト)ロケールのまま変わらない。つまり現状のlibc版
+        `is*`/`to*`も実質ASCII固定の分類しかしていないと判断し、
+        `libc/ctype.c`はASCII範囲の単純な比較だけで同じ挙動を再現する
+        (テーブル無し、`setlocale()`後の挙動変化が起きない前提を
+        `use locale`非対応の`PERL_MICRO`ビルドに合わせて明示化した形)
+      - handy.hの`isALPHA_LC`/`isSPACE_LC`/`isDIGIT_LC`/`toUPPER_LC`等
+        (`use locale`時やPOSIX文字クラス`[[:alpha:]]`、`\w`/`\d`/`\s`等の
+        正規表現文字クラスが最終的に使う、localeを考慮する版の分類
+        マクロ)経由でこれらが呼ばれることを確認
+      - **ハマった点**: 実装時のコメントに`is*/to*`という書き方を
+        使ったところ、C言語のブロックコメント終了記号`*/`と偶然一致し
+        コメントが途中で終了、直後の日本語テキストがコードとして
+        構文解析されて`stray '\343' in program`のようなエラーになった
+        (`libc/picoctype.h`と`t/ctype_test.c`の両方で発生)。
+        「A*/B」の形になる書き方を避け、「is*系/to*系」のように
+        表記を変えて回避した
+      - 動作確認: `nm -u romperl`から`__ctype_b_loc`が消えたことを
+        確認。plain picoperl側は`__ctype_b_loc`(マクロがインライン
+        展開されたもの)から本物のlibc `isalpha`/`isspace`等の**実関数
+        シンボル**の呼び出しに変わった(`#undef`+再定義のマクロ
+        リダイレクトを一度経由するため。挙動は完全に同じ、
+        シンボルの見え方だけが変わる無害な副作用)。バイナリサイズは
+        909,072→909,488byte(+416byte)に増えた。これは文字分類が
+        `getenv`/`qsort`/`rand`と違って呼び出し箇所が非常に多く、
+        LTOが全呼び出し箇所へのインライン展開をコスト面で断念し、
+        一部の分類関数(`isalpha`/`isspace`/`isupper`/`islower`/
+        `isalnum`/`ispunct`/`iscntrl`/`isgraph`/`isprint`)については
+        実体を残すため(他の関数は完全にインライン化されて消えた)。
+        `t/ctype_test.c`(C単体16項目、`make -C libc test`)で
+        0〜255の全バイト値について本物のlibc `<ctype.h>` と完全一致
+        することを確認。`t/test-ctype.pl`(Perl統合10項目、
+        `make-picoperl.sh`末尾と`make -C romperl test`両方で自動実行。
+        ロケール依存では無い通常の文字分類なのでpicoperl/romperl
+        どちらでも同じ結果になり、両方で実行して問題ないことを確認)
+      - **`locale.c`の除去は見送った(TODOの想定と異なり安全な削除では
+        ないと判明)**: `perl.c`が起動時に呼ぶ`Perl_init_i18nl10n()`
+        (`locale.c`)の本体は`#if defined(USE_LOCALE)`で丸ごと
+        ガードされ実質no-opだが、**その関数の末尾、`USE_LOCALE`とは
+        無関係な場所に`$ENV{PERL_UNICODE}`を解析して`PL_unicode`に
+        設定する処理が無条件で同居している**(STDIN/STDOUTの既定
+        UTF-8モード等に影響)。ここを見ずに`locale.c`ごと削って
+        `init_i18nl10n(1)`呼び出しを消すと、`PERL_UNICODE`環境変数の
+        サポートを静かに壊すところだった。「動かない機能をstubで
+        誤魔化さず、依存理由を確認してから削る」というCLAUDE.mdの
+        方針通り、削除は見送り、別途`PERL_UNICODE`処理部分だけを
+        切り出す作業として残す(現時点では`locale.c`はコンパイル
+        コストがほぼ無いno-op同然のため、削らなくても実害は無い)
 - [ ] `setjmp` / `longjmp` は Cortex-M33 でも必要。まずは x86_64 で。
 
 ## Phase 6: ARM Linux/Thumb で中間検証

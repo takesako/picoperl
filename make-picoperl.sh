@@ -34,6 +34,7 @@ cp -p ../env_shim.c "../$OUT/"
 cp -p ../sort_shim.c "../$OUT/"
 cp -p ../rand_shim.c "../$OUT/"
 cp -p ../time_shim.c "../$OUT/"
+cp -p ../ctype_shim.c "../$OUT/"
 cp -p Makefile.micro "../$OUT/Makefile"
 
 cd "../$OUT"
@@ -105,6 +106,16 @@ perl -pi -e 's/(uuniversal\$\(_O\) uutf8\$\(_O\) uutil\$\(_O\) uperlapi\$\(_O\) 
 cat >> Makefile <<'EOF'
 utime_shim$(_O): $(HE) time_shim.c
 	$(CC) $(CCFLAGS) -o $@ $(CFLAGS) time_shim.c
+EOF
+# ctype_shim.o: is*系/to*系(libcのlocale依存__ctype_b_loc経由)を内製実装
+# (romperl/libc/ctype.c、ASCII範囲の単純な比較)に繋ぐための弱い
+# デフォルト実装(本物のlibc is*(3)/to*(3)へのパススルー)。
+# env_shim.o/posix_shim.o/stdio_shim.o/sort_shim.o/rand_shim.o/
+# time_shim.oと同じ弱い/強いシンボルの仕組み。
+perl -pi -e 's/(uuniversal\$\(_O\) uutf8\$\(_O\) uutil\$\(_O\) uperlapi\$\(_O\) uposix_shim\$\(_O\) ustdio_shim\$\(_O\) uenv_shim\$\(_O\) usort_shim\$\(_O\) urand_shim\$\(_O\) utime_shim\$\(_O\))/$1 uctype_shim\$(_O)/' Makefile
+cat >> Makefile <<'EOF'
+uctype_shim$(_O): $(HE) ctype_shim.c
+	$(CC) $(CCFLAGS) -o $@ $(CFLAGS) ctype_shim.c
 EOF
 perl -0777 -pi -e 's@(    /\* Unregister our signal handler.*?)(    exitstatus = perl_destruct)@#ifndef PERL_MICRO\n$1#endif\n$2@s' miniperlmain.c
 perl -MConfig -pi -e 's/^((?:short|int|long(?:dbl|long)?|ptr|double|[iun]v|u?quad|[iu]\d+|fpos|lseek)(?:size|type)|byteorder|d_quad|quadkind|use64.+|uidtype|gidtype)=.*/"$1=\x27$Config{$1}\x27"/e; s/^(d_const|i_unistd|i_fcntl)=.*/$1=\x27define\x27/' uconfig.sh
@@ -183,3 +194,4 @@ printf 'binary: '; wc -c < picoperl
 ./picoperl ../t/test-float.pl
 ./picoperl ../t/test-noproc.pl
 ./picoperl ../t/test-env.pl
+./picoperl ../t/test-ctype.pl

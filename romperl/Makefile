@@ -35,12 +35,12 @@ all: romperl
 # 最小実装のままにする方針のため、posix_shim.c/stdio_shim.c/
 # env_shim.c/sort_shim.c/rand_shim.c/time_shim.cはいずれも弱い
 # デフォルトのまま。
-romperl: uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o ramfs.o vfs.o vfs_posix.o vfs_stdio.o env.o sort.o rand.o time.o
+romperl: uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o ramfs.o vfs.o vfs_posix.o vfs_stdio.o env.o sort.o rand.o time.o ctype.o
 	@if [ -z "$(strip $(PICOPERL_OBJS))" ]; then \
 		echo "error: $(PICOPERL_DIR)/*.o が無い。先に ../make-picoperl.sh を実行すること" >&2; \
 		exit 1; \
 	fi
-	$(CC) -o $@ uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o ramfs.o vfs.o vfs_posix.o vfs_stdio.o env.o sort.o rand.o time.o $(PICOPERL_OBJS) $(LDFLAGS) -lm
+	$(CC) -o $@ uperlmain.o romfs.o romfs_data.o romfs_xs.o romfs_compile.o ramfs.o vfs.o vfs_posix.o vfs_stdio.o env.o sort.o rand.o time.o ctype.o $(PICOPERL_OBJS) $(LDFLAGS) -lm
 
 uperlmain.o: main.c romfs.h $(LIBC_DIR)/env.h
 	$(CC) -c -o $@ $(CFLAGS) main.c
@@ -140,6 +140,9 @@ rand.o: $(LIBC_DIR)/rand.c $(LIBC_DIR)/rand.h
 time.o: $(LIBC_DIR)/picotime.c $(LIBC_DIR)/picotime.h
 	$(CC) -c -o $@ $(OPTIMIZE) $(LIBC_DIR)/picotime.c
 
+ctype.o: $(LIBC_DIR)/ctype.c $(LIBC_DIR)/picoctype.h
+	$(CC) -c -o $@ $(OPTIMIZE) $(LIBC_DIR)/ctype.c
+
 # romfs.c/romfs_data.cのAPI単体テスト (Perl統合前の動作確認用)。
 # t/romfs_test.c は romfs.h に依存するので -I. でカレントディレクトリ
 # (romperl/)をinclude pathに追加する。
@@ -172,10 +175,11 @@ test: romperl test-romfs test-inc-require test-zerocopy test-stdio
 	./romperl $(T_DIR)/test-noproc.pl
 	./romperl $(T_DIR)/test-env.pl
 	./romperl $(T_DIR)/test-time.pl
+	./romperl $(T_DIR)/test-ctype.pl
 
 clean:
 	rm -f uperlmain.o romperl romfs.o romfs_data.o romfs_data.c root.romfs romfs_test.o romfs_test romfs_xs.o romfs_compile.o
-	rm -f ramfs.o vfs.o vfs_posix.o vfs_stdio.o env.o sort.o rand.o time.o
+	rm -f ramfs.o vfs.o vfs_posix.o vfs_stdio.o env.o sort.o rand.o time.o ctype.o
 	rm -f $(ROOTFS_PM)
 	rm -f $(T_DIR)/malloctrace.so
 	rmdir rootfs/lib/Exporter rootfs/lib/warnings rootfs/lib/CGI rootfs/lib 2>/dev/null || true

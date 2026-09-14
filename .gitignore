@@ -18,5 +18,6 @@
 /libc/sort_test
 /libc/rand_test
 /libc/time_test
+/libc/ctype_test
 *.so
 core.*
