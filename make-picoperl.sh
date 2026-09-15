@@ -205,3 +205,4 @@ printf 'binary: '; wc -c < picoperl
 ./picoperl ../t/test-env.pl
 ./picoperl ../t/test-ctype.pl
 ./picoperl ../t/test-malloc.pl
+./picoperl ../t/test-setjmp.pl

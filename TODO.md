@@ -63,6 +63,14 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
   (op.c)がNULLチェック漏れのままSEGVすることがあり、これはこの
   アロケータではなくPerl 5.12.5 core側の既存の弱点(詳細は
   `libc/malloc.c`冒頭コメント参照)
+- `setjmp`/`longjmp`(Perlのeval/die例外機構の土台)をx86_64で検証。
+  こちらは自作実装への置き換えではなく検証作業: `uconfig.sh`の
+  `d_sigsetjmp='undef'`によりシグナルマスクを扱わない素の
+  `setjmp`/`longjmp`が既に使われていることを確認(`nm -u`でも
+  `_setjmp`/`longjmp`のみ)。`t/test-setjmp.pl`(13項目、ネストした
+  eval・深い再帰からのdie・localのスコープ復元等)で全通過。
+  `$SIG{__DIE__}`/`__WARN__`が`-DPERL_MICRO`下で無効化されている
+  (fork/killと同種の既存仕様)ことも副次的に確認済み
 - `romperl/`(Phase 4)完成: `../picoperl-5.12.5`の`.o`を参照するだけで
   picoperl-5.12.5自体には一切手を入れずに、自作ROMFS形式の埋め込み
   (`.romfs`セクション)、`open/read/seek/close/stat`最小API、
@@ -1173,7 +1181,44 @@ libc代替モジュールを、既存の`libc-pico2/`(*.hのシムヘッダを�
         方針通り、削除は見送り、別途`PERL_UNICODE`処理部分だけを
         切り出す作業として残す(現時点では`locale.c`はコンパイル
         コストがほぼ無いno-op同然のため、削らなくても実害は無い)
-- [ ] `setjmp` / `longjmp` は Cortex-M33 でも必要。まずは x86_64 で。
+- [x] `setjmp` / `longjmp` の x86_64 での検証。他のPhase 5項目と違い、
+      これは「libc実装を自作に置き換える」対象ではなく「Perlの例外機構
+      (eval/die)が土台にしているsetjmp/longjmpが正しく動くことを確認する」
+      検証作業と位置づけて実施した(setjmp/longjmpはコンパイラ/ABIと
+      密結合したプリミティブで、qsort/rand/mallocのような「置き換え
+      られる高水準関数」ではないため)。
+      - コード調査: `cop.h`の`JMPENV_PUSH`/`JMPENV_JUMP`が
+        `iperlsys.h`の`PerlProc_setjmp`/`PerlProc_longjmp`経由で
+        `uconfig.h`の`Sigsetjmp`/`Siglongjmp`マクロに繋がっている。
+        `uconfig.sh`は`d_sigsetjmp='undef'`(`HAS_SIGSETJMP`未定義)
+        のため、シグナルマスクの保存/復元を伴う`sigsetjmp`/
+        `siglongjmp`ではなく、素の`setjmp`/`longjmp`が使われている
+        ことを確認(`nm -u picoperl`/`nm -u romperl`でも
+        `_setjmp@GLIBC`/`longjmp@GLIBC`のみで`sigsetjmp`系は
+        リンクされていないことを確認済み)。シグナルマスクを扱わない
+        分、実機(OS無し、シグナルマスクの概念自体が無いbaremetal)
+        への移植はむしろ単純になる好材料
+      - `t/test-setjmp.pl`(13項目)を新規作成し、
+        `./picoperl ../t/test-setjmp.pl` / `make -C romperl test`双方で
+        自動実行するようにした(`make-picoperl.sh`末尾、
+        `romperl/Makefile`の`test`ターゲットに追加)。基本的な
+        eval/die、ネストしたeval(内側で捕捉/外側まで伝播の両方)、
+        200段の再帰呼び出し中からのdie(Cコールスタックの巻き戻し
+        確認)、`local`のスコープ復元(単純な変数・配列要素・ループ内
+        の両方)、blessedリファレンスをdieして`$@`で受け取る、
+        文字列eval内の構文エラー、を全てpicoperl/romperl両方で確認、
+        全項目通過
+      - **副次的な発見(バグではない)**: `$SIG{__DIE__}`/
+        `$SIG{__WARN__}`フックは、このビルドの前提である
+        `-DPERL_MICRO`(`Makefile.micro`)下では完全に無効(no-op)。
+        `mg.c`の`Perl_magic_setsig`全体が`#ifndef PERL_MICRO`で
+        コンパイル対象から除外されているため、`%SIG`への代入は
+        ただのハッシュ代入になるだけでフックとして機能しない
+        (upstream自体の既存の制限で、fork/killが`PERL_MICRO`下で
+        無効化されているのと同種)。クラッシュはせず、die/eval自体の
+        例外機構(setjmp/longjmp)は正常に動くことを確認した上で、
+        `t/test-setjmp.pl`はこの「no-opであること」自体をテストする
+        よう調整した
 
 ## Phase 6: ARM Linux/Thumb で中間検証
 
@@ -1182,7 +1227,7 @@ libc代替モジュールを、既存の`libc-pico2/`(*.hのシムヘッダを�
       `make regen_uconfig` に追加する。クロスコンパイルのオプション pico2 を
       追加した場合このコピー処理を実行してCCも変更する
       クロスコンパイルしない場合も考慮していままでの処理は残す
-- [ ] `qemu-arm` 上で `test-float.pl` を通すようにする
+- [ ] `qemu-arm` 上で `test-float.pl` などを通すようにする
 
 ## Phase 7: arm-none-eabi / Cortex-M33 (RP2350)
 

@@ -180,6 +180,7 @@ test: romperl test-romfs test-inc-require test-zerocopy test-stdio
 	./romperl $(T_DIR)/test-time.pl
 	./romperl $(T_DIR)/test-ctype.pl
 	./romperl $(T_DIR)/test-malloc.pl
+	./romperl $(T_DIR)/test-setjmp.pl
 
 clean:
 	rm -f uperlmain.o romperl romfs.o romfs_data.o romfs_data.c root.romfs romfs_test.o romfs_test romfs_xs.o romfs_compile.o
