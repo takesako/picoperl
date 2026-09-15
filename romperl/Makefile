@@ -9,11 +9,30 @@ PICOPERL_DIR = ../picoperl-5.12.5
 RAMFS_DIR = ../ramfs
 VFS_DIR = ../vfs
 LIBC_DIR = ../libc
+
+# TARGET=pico2: Phase 6の中間検証用、arm-linux-gnueabihf(32bit ARM
+# Linux/Thumb)向けクロスビルド。事前に`TARGET=pico2 ../make-picoperl.sh`で
+# $(PICOPERL_DIR)/*.oをARM向けに作り直しておくこと(picoperlとromperlの
+# .oはCPUアーキテクチャが一致していないとリンクできない)。qemu-user-binfmt
+# が有効なホストなら$(RUN)を付けずに直接./romperlを実行しても動くが、
+# 環境非依存にするため明示的に`qemu-arm`経由で実行する。
+TARGET ?= native
+ifeq ($(TARGET),pico2)
+CC = arm-linux-gnueabihf-gcc
+RUN = qemu-arm
+CROSSFLAGS = -mthumb
+LDCROSSFLAGS = -static
+else
 CC = cc
+RUN =
+CROSSFLAGS =
+LDCROSSFLAGS =
+endif
+
 OPTIMIZE = -Os -std=gnu89 -DNO_MATHOMS -flto -ffunction-sections -fdata-sections \
-	-I$(LIBC_DIR) -I$(PICOPERL_DIR) -I$(RAMFS_DIR) -I$(VFS_DIR) -I.
+	-I$(LIBC_DIR) -I$(PICOPERL_DIR) -I$(RAMFS_DIR) -I$(VFS_DIR) -I. $(CROSSFLAGS)
 CFLAGS = -DPERL_CORE -DPERL_MICRO -DSTANDARD_C -DPERL_USE_SAFE_PUTENV $(OPTIMIZE)
-LDFLAGS = -flto=auto -Wl,--gc-sections
+LDFLAGS = -flto=auto -Wl,--gc-sections $(LDCROSSFLAGS)
 
 # picoperl本体の.o一式から、main()を含むuperlmain.oだけ除外して使う。
 PICOPERL_OBJS = $(filter-out %/uperlmain.o,$(wildcard $(PICOPERL_DIR)/*.o))
@@ -155,32 +174,39 @@ romfs_test: $(T_DIR)/romfs_test.c romfs.o romfs_data.o
 	$(CC) -o $@ $(OPTIMIZE) -I. $(T_DIR)/romfs_test.c romfs.o romfs_data.o $(LDFLAGS)
 
 test-romfs: romfs_test
-	./romfs_test
+	$(RUN) ./romfs_test
 
 # romperl本体を使ったテスト一式。既存のpicoperl向けテストが romperl でも
 # 通ること(回帰確認)と、ROMFS経由のrequire/useが動くことを確認する。
 test-inc-require: romperl
-	./romperl $(T_DIR)/test-inc-require.pl
+	$(RUN) ./romperl $(T_DIR)/test-inc-require.pl
 
 # LD_PRELOAD mallocトレーサ(t/malloctrace.c)を使い、pp_requireを直接
 # ROMFSに繋いだtrue zero-copy経路が実際にファイルサイズ分のmalloc/realloc
 # を発生させていないことを実測で検証する(t/test-zerocopy.sh参照)。
+# TARGET=pico2ではネイティブ.so(LD_PRELOAD)をqemu-arm越しに読み込む
+# 構成が煩雑になる割に検証内容(malloc回数)自体はアーキテクチャに
+# 依存しないため、x86_64側の確認で足りるとしてスキップする。
 test-zerocopy: romperl $(ROOTFS_PM)
+ifeq ($(TARGET),pico2)
+	@echo "test-zerocopy: TARGET=pico2 ではスキップ (LD_PRELOADはネイティブのみ)"
+else
 	$(T_DIR)/test-zerocopy.sh
+endif
 
 # open($fh,mode,path)/print/read/closeがvfs(romfs+ramfs)経由で動くことを
 # 確認するPerl統合テスト。
 test-stdio: romperl
-	./romperl $(T_DIR)/test-stdio.pl
+	$(RUN) ./romperl $(T_DIR)/test-stdio.pl
 
 test: romperl test-romfs test-inc-require test-zerocopy test-stdio
-	./romperl $(T_DIR)/test-float.pl
-	./romperl $(T_DIR)/test-noproc.pl
-	./romperl $(T_DIR)/test-env.pl
-	./romperl $(T_DIR)/test-time.pl
-	./romperl $(T_DIR)/test-ctype.pl
-	./romperl $(T_DIR)/test-malloc.pl
-	./romperl $(T_DIR)/test-setjmp.pl
+	$(RUN) ./romperl $(T_DIR)/test-float.pl
+	$(RUN) ./romperl $(T_DIR)/test-noproc.pl
+	$(RUN) ./romperl $(T_DIR)/test-env.pl
+	$(RUN) ./romperl $(T_DIR)/test-time.pl
+	$(RUN) ./romperl $(T_DIR)/test-ctype.pl
+	$(RUN) ./romperl $(T_DIR)/test-malloc.pl
+	$(RUN) ./romperl $(T_DIR)/test-setjmp.pl
 
 clean:
 	rm -f uperlmain.o romperl romfs.o romfs_data.o romfs_data.c root.romfs romfs_test.o romfs_test romfs_xs.o romfs_compile.o

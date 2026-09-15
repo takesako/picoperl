@@ -2,12 +2,34 @@
 set -eu
 
 V=5.12.5; T=perl-$V.tar.gz; SRC=perl-$V; OUT=picoperl-$V
-URL=https://www.cpan.org/src/5.0/$T; CC=${CC:-cc}; JOBS=${JOBS:-4}
+URL=https://www.cpan.org/src/5.0/$T; JOBS=${JOBS:-4}
+# TARGET=pico2: Phase 6の中間検証用、arm-linux-gnueabihf(32bit ARM
+# Linux/Thumb)向けクロスビルド。実機(Cortex-M33, Phase 7)そのものでは
+# なく、あくまでx86_64とarm-none-eabiの間の中間地点(OS有り・glibc有りの
+# 32bit ARM Linuxで一旦動かして問題を切り分ける)という位置づけ。
+# 結果のバイナリは-staticでリンクするため、qemu-arm(qemu-user-binfmtが
+# 有効ならバイナリを直接実行するだけで済むが、ここでは環境非依存に
+# するため明示的に`qemu-arm`経由で実行する)でそのままテストできる。
+TARGET=${TARGET:-native}
+case "$TARGET" in
+pico2)
+    CC=${CC:-arm-linux-gnueabihf-gcc}
+    RUN='qemu-arm'
+    ;;
+*)
+    CC=${CC:-cc}
+    RUN=''
+    ;;
+esac
 OPTIMIZE="${OPTIMIZE:--Os -std=gnu89 -DNO_MATHOMS -flto -ffunction-sections -fdata-sections -I../libc}"
 case $(uname -s) in
 Darwin) LDFLAGS="${LDFLAGS:--flto -Wl,-dead_strip}";;
 *) LDFLAGS="${LDFLAGS:--flto -Wl,--gc-sections}";;
 esac
+if [ "$TARGET" = pico2 ]; then
+    OPTIMIZE="$OPTIMIZE -mthumb"
+    LDFLAGS="$LDFLAGS -static"
+fi
 
 [ -f "$T" ] || curl -fL "$URL" -o "$T"
 [ -d "$SRC" ] || tar xzf "$T"
@@ -130,6 +152,12 @@ perl -0777 -pi -e 's@(    /\* Unregister our signal handler.*?)(    exitstatus =
 perl -MConfig -pi -e 's/^((?:short|int|long(?:dbl|long)?|ptr|double|[iun]v|u?quad|[iu]\d+|fpos|lseek)(?:size|type)|byteorder|d_quad|quadkind|use64.+|uidtype|gidtype)=.*/"$1=\x27$Config{$1}\x27"/e; s/^(d_const|i_unistd|i_fcntl)=.*/$1=\x27define\x27/' uconfig.sh
 perl -MConfig -pi -e 's/^(signal_t)=.*/"$1=\x27$Config{$1}\x27"/e;' uconfig.sh
 # perl -MConfig -pi -e 's/^(\w+)=.*/exists $Config{$1} ? $1."=\x27".(defined $Config{$1}?$Config{$1}:"undef")."\x27" : $&/e' uconfig.sh
+# TARGET=pico2: 上の2行はホスト(x86_64)のperl -MConfigから値を取るため
+# 32bit ARMには使えない。実測値で作った../uconfig.sh.pico2で丸ごと
+# 置き換える(直後のnvtype/nvsize等の共通パッチは変わらず適用される)。
+if [ "$TARGET" = pico2 ]; then
+    cp -p ../uconfig.sh.pico2 uconfig.sh
+fi
 perl -pi -e "s/^nvtype=.*/nvtype='float'/; s/^nvsize=.*/nvsize='4'/" uconfig.sh
 
 # i_float='undef' だと perl.h は <float.h> をincludeしない。DBL_DIG等はperl.h内に
@@ -198,11 +226,12 @@ perl -pi -e 's/(\s+)lex_start\(NULL, tryrsfp, TRUE\);/$1lex_start(romsv ? romsv 
 make regen_uconfig
 make clean
 make -j"$JOBS" CC="$CC" LD="$CC" OPTIMIZE="$OPTIMIZE" LDFLAGS="$LDFLAGS"
-./picoperl -e 'print "picoperl $^V OK\n"'
+file picoperl 2>/dev/null || true
+$RUN ./picoperl -e 'print "picoperl $^V OK\n"'
 printf 'binary: '; wc -c < picoperl
-./picoperl ../t/test-float.pl
-./picoperl ../t/test-noproc.pl
-./picoperl ../t/test-env.pl
-./picoperl ../t/test-ctype.pl
-./picoperl ../t/test-malloc.pl
-./picoperl ../t/test-setjmp.pl
+$RUN ./picoperl ../t/test-float.pl
+$RUN ./picoperl ../t/test-noproc.pl
+$RUN ./picoperl ../t/test-env.pl
+$RUN ./picoperl ../t/test-ctype.pl
+$RUN ./picoperl ../t/test-malloc.pl
+$RUN ./picoperl ../t/test-setjmp.pl

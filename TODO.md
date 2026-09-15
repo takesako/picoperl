@@ -3,7 +3,7 @@
 picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リスト。
 詳細な方針は [CLAUDE.md](CLAUDE.md) を参照。
 
-## 現状 (2026-09-13, x86_64 WSL/Debian)
+## 現状 (2026-09-15, x86_64 WSL/Debian + arm-linux-gnueabihf クロスビルド)
 
 - `./make-picoperl.sh` でビルド成功、`picoperl -e` 動作確認済み
 - バイナリサイズ: 908,992 bytes (`-Os -flto -ffunction-sections -fdata-sections` + `--gc-sections`)
@@ -71,6 +71,13 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
   eval・深い再帰からのdie・localのスコープ復元等)で全通過。
   `$SIG{__DIE__}`/`__WARN__`が`-DPERL_MICRO`下で無効化されている
   (fork/killと同種の既存仕様)ことも副次的に確認済み
+- Phase 5完了を受けてPhase 6(ARM Linux/Thumb中間検証)に着手。
+  `TARGET=pico2 ./make-picoperl.sh`(picoperl)・
+  `TARGET=pico2 make -C romperl test`(romperl)で`arm-linux-gnueabihf-gcc
+  -mthumb -static`によるクロスビルド→`qemu-arm`実行までが自動化され、
+  既存のテスト一式(ROMFS/RAMFS/vfs経由のCarp.pm/CGI.pm require含む)が
+  初回のクロスビルドで全て通過した。x86_64ネイティブ(`TARGET=native`、
+  デフォルト)側は無変更で動作継続を確認済み。詳細はPhase 6セクション参照
 - `romperl/`(Phase 4)完成: `../picoperl-5.12.5`の`.o`を参照するだけで
   picoperl-5.12.5自体には一切手を入れずに、自作ROMFS形式の埋め込み
   (`.romfs`セクション)、`open/read/seek/close/stat`最小API、
@@ -1222,12 +1229,69 @@ libc代替モジュールを、既存の`libc-pico2/`(*.hのシムヘッダを�
 
 ## Phase 6: ARM Linux/Thumb で中間検証
 
-- [ ] `arm-linux-gnueabihf-gcc -mthumb` でクロスビルドを試す、テストはまだ
-- [ ] `uconfig.sh.pico2` ファイルを作り、コピー処理を `make-picoperl.sh` の
-      `make regen_uconfig` に追加する。クロスコンパイルのオプション pico2 を
-      追加した場合このコピー処理を実行してCCも変更する
-      クロスコンパイルしない場合も考慮していままでの処理は残す
-- [ ] `qemu-arm` 上で `test-float.pl` などを通すようにする
+- [x] `arm-linux-gnueabihf-gcc -mthumb` でクロスビルドし、`qemu-arm`上で
+      picoperl/romperl両方のテスト一式を通す。`TARGET=pico2`という
+      環境変数(`make-picoperl.sh`と`romperl/Makefile`両方で共通)を
+      新設し、`TARGET=native`(デフォルト、今まで通りのx86_64ネイティブ
+      ビルド)と切り替えられるようにした:
+      ```sh
+      TARGET=pico2 ./make-picoperl.sh   # picoperl本体をARM向けにクロスビルド
+      TARGET=pico2 make -C romperl test # romperlもARM向けにクロスビルド+qemu-armでテスト
+      ```
+      `TARGET=pico2`だと`CC`が`arm-linux-gnueabihf-gcc`に、`OPTIMIZE`に
+      `-mthumb`が、`LDFLAGS`に`-static`(qemu-user-binfmt無しの環境でも
+      `qemu-arm ./picoperl`で直接実行できるよう、動的リンカ探索を回避する
+      ため)が自動で追加される。テスト実行コマンドは全て`$RUN`
+      (`TARGET=pico2`なら`qemu-arm`、`native`なら空)で始まるようにした
+      ことで、picoperl/romperlのMakefile・make-picoperl.shどちらも
+      同じ`test`ターゲット/末尾処理をそのまま使い回せる
+      (`TARGET=native`側は今まで通り無変更で動くことを確認済み)
+- [x] `uconfig.sh.pico2`(新規、プロジェクトルート)を作成し、
+      `make-picoperl.sh`のuconfig.sh生成処理に組み込んだ。通常は
+      ホスト(x86_64)の`perl -MConfig`から`ivsize`/`longsize`/`ptrsize`
+      等を取得しているが、これはクロスコンパイル先のARM(32bit)には
+      使えないため、`TARGET=pico2`の時だけ生成済みのuconfig.shを
+      `uconfig.sh.pico2`で丸ごと上書きするようにした。中身は
+      `arm-linux-gnueabihf-gcc`でsizeof(...)を出力するテストプログラムを
+      コンパイルし`qemu-arm`で実際に実行して確認した実測値
+      (`ivsize`/`uvsize`: 8→4、`longsize`/`ptrsize`: 8→4、
+      `longdblsize`: 16→8、`i64type`/`u64type`/`quadtype`/`uquadtype`:
+      `long`→`long long`、`quadkind`: 2→3、`byteorder`:
+      '12345678'→'1234'。`use64bitint`/`use64bitall`はARMのlongが
+      4byteのため'undef'に変更 = 32bit Perlの標準的な構成そのもの)。
+      詳細な根拠は`uconfig.sh.pico2`冒頭のコメント参照
+- [x] `qemu-arm`上でpicoperl/romperl双方の既存テスト一式が初回の
+      クロスビルドで全て通過(`test-float.pl`/`test-noproc.pl`/
+      `test-env.pl`/`test-time.pl`/`test-ctype.pl`/`test-malloc.pl`/
+      `test-setjmp.pl`、romperlはさらに`romfs_test`/
+      `test-inc-require.pl`/`test-stdio.pl`もROMFS埋め込みの
+      Carp.pm/CGI.pm等を含めて動作確認済み)。バイナリサイズは
+      picoperlが1,180,052byte(x86_64ネイティブの908,992byteより
+      大きいのは主に`-static`によるglibc静的リンク分。動的リンクなら
+      qemu-user-binfmt環境か`QEMU_LD_PREFIX=/usr/arm-linux-gnueabihf`
+      指定が必要になるため、テストの自動実行しやすさを優先して
+      staticを選んだ)
+  - **`test-zerocopy`は`TARGET=pico2`ではスキップ**: `t/malloctrace.c`
+    (LD_PRELOADで`malloc`呼び出し回数を数える)はネイティブ実行前提の
+    共有ライブラリで、qemu-arm越しのLD_PRELOAD構成は煩雑な割に
+    「zero-copy化でmalloc回数が減る」という検証内容自体は
+    アーキテクチャに依存しないため、x86_64側の確認で足りると判断した
+  - **細かい残作業(未着手、Phase 6の完了条件ではなく発展的な確認事項)**:
+    - [ ] `alignbytes`(pristineなuconfig.shのまま`4`)がARMでも
+          問題ないか(8byteの`double`アクセスがSIGBUSを起こさないか)の
+          明示的な確認。今回のテスト一式では顕在化しなかったが、
+          `double`を直接アラインメント境界外に置くような操作
+          (`pack`/`unpack`の`d`/`Q`等)は未テスト
+    - [ ] `vfs`/`ramfs`/`libc`配下の単体テスト(`vfs_test`/
+          `ramfs_test`/`env_test`等)は`TARGET=pico2`でのクロスビルドに
+          まだ対応していない(romperl向けの`t/test-*.pl`経由では
+          間接的にカバーされているが、C単体テストとしては未実施)
+    - [ ] `-static`ではなく動的リンクでのビルド・実行(実機に近い
+          共有ライブラリ構成)は今回検証していない
+    - [ ] `qemu-arm`(ユーザーモードエミュレーション)止まりで、
+          `qemu-system-arm`(フルシステムエミュレーション、カーネル起動)
+          へは未着手。Phase 8の「QEMU libvirtで動く」ゴールに近づける
+          にはこちらの検証も要る
 
 ## Phase 7: arm-none-eabi / Cortex-M33 (RP2350)
 
