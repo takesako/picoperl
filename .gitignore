@@ -20,5 +20,7 @@
 /libc/time_test
 /libc/ctype_test
 /libc/malloc_test
+/cm33/hello.elf
+/cm33/test-malloc.elf
 *.so
 core.*

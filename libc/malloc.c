@@ -4,8 +4,10 @@
  * ヒープ領域全体を単一の連続領域として確保し、その中をチャンク単位で
  * 切り出す最小限のアロケータ。x86_64ホストでは本物のmalloc()で
  * ヒープ領域を一括確保し(init_heap参照)、その中を細かく切り出す。
- * 実機(RP2350、Phase 7)ではこの一括確保部分を固定サイズの静的配列
- * (またはリンカスクリプトで確保した領域)に差し替える想定。
+ * ベアメタル(cm33/、Phase 7)では`-DPICOPERL_MALLOC_STATIC_HEAP`を
+ * 付けてコンパイルすることで、この一括確保部分が固定サイズの静的配列
+ * (`picoperl_static_heap`)に切り替わる。チャンク管理のコード自体は
+ * 完全に共通(init_heap以外は#ifdefで分岐しない)。
  *
  * データ構造(性能よりシンプルさを優先): ヒープ内の全チャンク
  * (使用中・空き問わず)を、物理的なアドレス順の単方向リストとして
@@ -62,7 +64,9 @@
  * 十分な余裕を持たせることで回避している(この種の失敗はこのアロケータ
  * を直しても解決しない、Perl core側の限界であるため)。
  */
+#ifndef PICOPERL_HEAP_SIZE
 #define PICOPERL_HEAP_SIZE (4096UL * 1024UL)
+#endif
 
 #define PICOPERL_MALLOC_ALIGN 8
 #define PICOPERL_MIN_PAYLOAD  8
@@ -82,12 +86,26 @@ align_up(size_t n)
     return (n + (PICOPERL_MALLOC_ALIGN - 1)) & ~(size_t)(PICOPERL_MALLOC_ALIGN - 1);
 }
 
+#ifdef PICOPERL_MALLOC_STATIC_HEAP
+/*
+ * Phase 7(ベアメタルCortex-M33)向け: OSのmalloc()が無い(newlibの
+ * _sbrkはnewlib自身の内部用に別途小さく確保してあるだけで、Perlの
+ * 大きなヒープ用ではない)ため、リンク時に静的に確保した固定サイズの
+ * 配列をヒープ領域として使う。ヒープの中身の管理(チャンク分割・
+ * coalescing)はx86_64版と完全に同じコードを共有する。
+ */
+static unsigned char picoperl_static_heap[PICOPERL_HEAP_SIZE];
+#endif
+
 static void
 init_heap(void)
 {
     if (heap_head)
         return;
 
+#ifdef PICOPERL_MALLOC_STATIC_HEAP
+    heap_base = picoperl_static_heap;
+#else
     /*
      * `(malloc)`と余分な括弧で囲っているのは、libc/stdlib.hのシムが
      * malloc()自体をpicoperl_malloc()にリダイレクトしているため、
@@ -100,6 +118,7 @@ init_heap(void)
     heap_base = (unsigned char *)(malloc)(PICOPERL_HEAP_SIZE);
     if (!heap_base)
         return; /* 確保に失敗したら以後ずっとメモリ不足として振る舞う */
+#endif
 
     heap_head = (struct chunk *)heap_base;
     heap_head->size = PICOPERL_HEAP_SIZE - sizeof(struct chunk);
@@ -110,8 +129,10 @@ init_heap(void)
 void
 picoperl_malloc_reset(void)
 {
+#ifndef PICOPERL_MALLOC_STATIC_HEAP
     if (heap_base)
         (free)(heap_base);
+#endif
     heap_base = NULL;
     heap_head = NULL;
     init_heap();

@@ -3,7 +3,7 @@
 picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リスト。
 詳細な方針は [CLAUDE.md](CLAUDE.md) を参照。
 
-## 現状 (2026-09-15, x86_64 WSL/Debian + arm-linux-gnueabihf クロスビルド)
+## 現状 (2026-09-15, x86_64 WSL/Debian + ARM クロスビルド/ベアメタル基盤)
 
 - `./make-picoperl.sh` でビルド成功、`picoperl -e` 動作確認済み
 - バイナリサイズ: 908,992 bytes (`-Os -flto -ffunction-sections -fdata-sections` + `--gc-sections`)
@@ -78,6 +78,18 @@ picoperl: microperl を RP2350 (Cortex-M33) 向け最小 Perl にする作業リ
   既存のテスト一式(ROMFS/RAMFS/vfs経由のCarp.pm/CGI.pm require含む)が
   初回のクロスビルドで全て通過した。x86_64ネイティブ(`TARGET=native`、
   デフォルト)側は無変更で動作継続を確認済み。詳細はPhase 6セクション参照
+- Phase 7(arm-none-eabi/Cortex-M33、RP2350の最終目標CPU)に着手。
+  RP2350自体はQEMUに無いため、まずはARM純正のCortex-M33参照ボード
+  QEMU `mps2-an505`向けに、ゼロから自作したベアメタル基盤(`cm33/`:
+  ARMv8-Mベクタテーブル+Reset_Handler+リンカスクリプト+CMSDK UART+
+  newlibリターゲット)が実際に起動・UART出力できることを確認した
+  (`make -C cm33 test`)。あわせて`libc/malloc.c`に
+  `-DPICOPERL_MALLOC_STATIC_HEAP`(ヒープ領域をmalloc()呼び出しでは
+  なくリンク時の静的配列にする、実機向けの仕組み)を追加しQEMU上で
+  動作確認済み。picoperl本体自体はまだcm33でリンクしておらず、
+  RP2350実機固有の要件(ブートROMメタデータブロック・実際のflash/
+  SRAMアドレス配置・実際のUARTレジスタ)も未着手。詳細はPhase 7
+  セクション参照
 - `romperl/`(Phase 4)完成: `../picoperl-5.12.5`の`.o`を参照するだけで
   picoperl-5.12.5自体には一切手を入れずに、自作ROMFS形式の埋め込み
   (`.romfs`セクション)、`open/read/seek/close/stat`最小API、
@@ -1295,10 +1307,118 @@ libc代替モジュールを、既存の`libc-pico2/`(*.hのシムヘッダを�
 
 ## Phase 7: arm-none-eabi / Cortex-M33 (RP2350)
 
-- [ ] `arm-none-eabi-gcc -mcpu=cortex-m33 -mthumb` で動くように実装
-- [ ] リンカスクリプト / スタートアップ / スタックサイズの決定
-- [ ] ヒープサイズと RP2350 の RAM (520KB) に収まるかの見積もり
-- [ ] `setjmp`/`longjmp` と例外処理の動作確認
+QEMUにRP2350自体のモデルは無く、実機も本環境には無いため、まずは
+`arm-none-eabi-gcc -mcpu=cortex-m33 -mthumb`(newlib-nano)でのビルドと、
+QEMU `mps2-an505`(ARM純正のCortex-M33 x1リファレンスボード、TrustZone
+対応)上でのベアメタル起動確認から着手した。AN505はRP2350とはメモリ
+マップもペリフェラルも全く別物なので、「Cortex-M33のThumb2コード生成・
+呼び出し規約・ベアメタル起動の型」を検証するためのISAレベルの踏み台
+という位置づけであり、これ自体はRP2350実機での動作を保証しない
+(そこがPhase 7の残作業の中心になる)。
+
+- [x] `arm-none-eabi-gcc -mcpu=cortex-m33 -mthumb -mfloat-abi=hard
+      -mfpu=fpv5-sp-d16 --specs=nano.specs --specs=nosys.specs`で
+      ビルドしたベアメタルバイナリがQEMU `mps2-an505`上で実際に起動し、
+      UART出力まで確認できた(`cm33/`、新規サブシステム。
+      `make -C cm33 test`)。FPU付き(単精度、v8-m.main+fp)の
+      multilibが使えることを確認済み(picoperlのNV=float方針と相性が良い)
+- [x] リンカスクリプト / スタートアップ / スタックサイズの決定 —
+      `cm33/link.ld`(ORIGIN=0x10000000、単一4MB RAM領域にvector/text/
+      data/bssをまとめて配置)・`cm33/startup.c`(ARMv8-Mベクタテーブル+
+      Reset_Handlerで.data/.bssを初期化して`main()`を呼ぶ)・
+      `cm33/uart.c`(CMSDK APB UART0への直接ポーリング送信)・
+      `cm33/syscalls.c`(newlibの`_write`をUARTへ、`_sbrk`を16KBの
+      固定静的領域へのbump allocatorへリダイレクト)を新規作成。
+      **重大な発見(2つ、実際にQEMUでクラッシュさせて特定した)**:
+      1. ARMv8-M(Cortex-M33)のベクタテーブルはARMv7-M(Cortex-M3/M4)と
+         要素数が違う: index 7に`SecureFault`が新設されている。
+         v7-M用のテーブル(そこをreservedとして0のまま)を使うと、
+         `SecureFault`発生時にNULLへジャンプして
+         `UsageFault→BusFault(スタックエラー)→HardFaultへの
+         エスカレーション失敗→ロックアップ`という連鎖クラッシュになる
+         (`cm33/startup.c`のコメント参照)
+      2. **`mps2-an505`はCPUがSecure状態でリセットするTrustZone対応
+         ボードで、リセット時のベクタテーブル読み出しはアドレス
+         0x00000000(Non-secureエイリアス)ではなく0x10000000
+         (Secureエイリアス)側で行われる**。QEMUの`-kernel`はELFの
+         アドレスへそのままロードするだけなので、0x00000000にリンクした
+         ベクタテーブルはリセット時のCPUからは見えず、SP=0/PC=0を
+         読んで即クラッシュする。QEMUを`-d int,guest_errors`付きで
+         走らせ、モニタの`info mtree`でメモリマップを確認しながら
+         原因を特定し、`cm33/link.ld`のORIGINを0x10000000に修正して
+         解決した(`cm33/link.ld`のコメント参照)。RP2350実機はこの
+         TrustZoneエイリアス構造を持たない別物のブートシーケンス
+         (後述)なので、この特定のアドレスはAN505固有の知見
+- [x] ヒープサイズの静的配列化(RP2350の520KBへの見積もりの前提となる
+      仕組み自体は用意した): `libc/malloc.c`に
+      `-DPICOPERL_MALLOC_STATIC_HEAP`を追加。定義時はヒープ領域の
+      一括確保が(x86_64向けの)本物の`malloc()`呼び出しから、リンク時に
+      静的に確保した固定サイズ配列(`picoperl_static_heap`)に切り替わる
+      (チャンク管理コードは共通)。あわせて`PICOPERL_HEAP_SIZE`自体も
+      `-D`で上書きできるようにした。`cm33/test-malloc.c`
+      (`make -C cm33 test`に含む)でQEMU上で実際に静的配列ヒープでの
+      malloc/calloc/free/coalescingが動くことを確認済み(検証用に
+      64KBへ縮めてテスト。RP2350実機での実際のヒープサイズ決定は
+      未着手、下記の残作業参照)
+- [ ] `setjmp`/`longjmp` と例外処理の動作確認 (Cortex-M33実機/QEMU上)。
+      x86_64/arm-linux-gnueabihf(Phase 5/6)ではglibcの`setjmp`/
+      `longjmp`を確認したが、newlib版(Cortex-M33/Thumb2用のアセンブリ
+      実装)は未検証。まだpicoperl本体をcm33でリンクしていないため
+      次の項目待ち
+
+### Phase 7の残作業(細かいTODO、優先度が高い順)
+
+- [ ] **picoperl本体をcm33向けにコンパイル・リンクする**。現状
+      `cm33/`はベアメタル基盤(vector/link/uart/syscalls/malloc)のみで、
+      picoperl-5.12.5のソース自体はまだ一行もcm33向けにビルドして
+      いない。`TARGET=pico2`と同じ要領で`TARGET=cm33`を
+      `make-picoperl.sh`に追加し、`uconfig.sh.cm33`
+      (ワードサイズは`uconfig.sh.pico2`と同一のはずだが、OS機能系の
+      `d_*`/`i_*`をnewlib-nanoの実際の対応状況に合わせて見直す必要が
+      ある)を用意するところから。newlibは`fork`/`wait`/`kill`等の
+      ヘッダ(`<sys/wait.h>`等)自体は提供する(コンパイルは通る)ため、
+      libc/以下の既存の弱い/強いシンボル置き換えの仕組みがそのまま
+      使えるはず、というのが現時点の見立て(未検証)
+  - [ ] リンクした際、newlibが未提供のシンボル(環境変数`environ`、
+        `getcwd`等)がどれだけ残るか洗い出す
+  - [ ] plain picoperl(romperlではなく)をまずcm33でリンクする
+        (romperlはROMFS/vfs/ramfsが絡み複雑なため後回しにする)
+  - [ ] `picoperl -e '...'`相当の最小実行(`Perl_parse`+`Perl_run`)を
+        `cm33/main.c`から直接呼び出し、UART経由で`print`の出力が
+        見えることを確認する。stdout/stderrを`_write`(UART)に
+        繋ぐこと自体は`cm33/syscalls.c`で既に用意済みなので、
+        `PerlIO`がそこに正しく到達するかがポイント
+- [ ] **RP2350実機向けのリンカスクリプト**: `cm33/link.ld`はAN505の
+      仮の4MB RAM一枚だが、RP2350は`XIP flash 0x10000000`(最大32MB、
+      実行にはQSPI XIP経由のキャッシュが要る)と`SRAM 0x20000000`
+      (520KB、複数バンクに分かれている)の分離構成。`.text`/`.rodata`は
+      flash、`.data`のロードアドレスはflash・実行アドレスはSRAM、
+      という一般的な組込みリンカスクリプトへの書き直しが要る
+- [ ] **RP2350ブートROMのメタデータブロック**: RP2350は単純に
+      「先頭にベクタテーブル」を置くだけでは起動しない。ブートROMが
+      flash先頭付近の署名/CRC付きメタデータブロック(image definition
+      block)を要求する仕様がある(RP2040には無かった、RP2350で
+      新設された要件)。picotool/pico-sdkに頼らず自前で満たす場合、
+      この仕様を正確に実装する必要があり、現時点で未着手・未調査
+- [ ] **RP2350実機のUART**: `cm33/uart.c`のレジスタ配置
+      (CMSDK APB UART、0x40200000)はAN505固有。RP2350のUARTは
+      アドレス・レジスタ配置ともに別物(0x40070000/0x40078000、
+      Raspberry Pi独自ブロック)で、実機に繋ぐ際は書き直しが要る
+      (Phase 8の「PerlIOをUARTドライバに接続」でも同じ話になる)
+- [ ] **ヒープサイズの実測**: `PICOPERL_MALLOC_STATIC_HEAP`の仕組みは
+      できたが、「RP2350の520KB SRAMに実際に収まるか」の見積もり
+      そのものは未着手。malloc.cの既存コメントにある通り、x86_64での
+      実測では`use strict; use warnings; use Carp;`だけで384KB前後、
+      CGI.pmを使う処理は2MB以上を要しており、この傾向がcm33ビルド
+      (32bit、IV/ポインタが4byteでSVヘッダ等が小さくなる分若干は
+      減る見込みだが、大きくは変わらない可能性が高い)でも近ければ
+      520KB全体には収まらないスクリプトがほとんどになる。埋め込む
+      モジュール(CGI.pm等)を減らす、Perl側のメモリ使用量を減らす、
+      外部RAMを使う、のいずれかの追加検討が必要という結論は変わらない
+- [ ] `setjmp`/`longjmp`(newlib版、Cortex-M33/Thumb2アセンブリ実装)を
+      使ったeval/dieの例外機構が実機/QEMU上で動くことの確認
+      (`t/test-setjmp.pl`相当をcm33向けに移植する形になる見込み)。
+      picoperl本体のリンクができてから着手可能
 
 ## Phase 8: RAMFS + UART のみで動作
 
